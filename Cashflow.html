@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cashflow — Lune SDK</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  button, input { font-family: inherit; }
+  .cf-screens::-webkit-scrollbar { width: 0; display: none; }
+  .cf-screens { scrollbar-width: none; }
+  .slide-fwd { animation: slideFwd .36s cubic-bezier(.22,1,.36,1); }
+  .slide-back { animation: slideBack .3s cubic-bezier(.23,1,.32,1); }
+  @keyframes slideFwd { from { transform: translateX(28px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+  @keyframes slideBack { from { transform: translateX(-20px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+  @keyframes growX { from { transform: scaleX(0); opacity: .35 } to { transform: scaleX(1); opacity: 1 } }
+  @keyframes growY { from { transform: scaleY(0); opacity: .4 } to { transform: scaleY(1); opacity: 1 } }
+  /* press feedback — instant response to a tap */
+  .cf-press { transition: transform .16s cubic-bezier(.23,1,.32,1); }
+  .cf-press:active { transform: scale(.97); }
+  @keyframes popIn { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: translateY(0) } }
+  @media (prefers-reduced-motion: reduce) { .slide-fwd, .slide-back { animation: none; } svg, div, span { animation: none !important; } }
+  @media print { *, *::before, *::after { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useMemo } = React;
+
+/* ──────────────────────────────────────────────────────────────
+   Cashflow module — Lune SDK prototype.
+   Liquidity lens: Landing (in vs out vs net) → Outflow + Inflow.
+   Mock data: UAE consumer, AED. Inflow is by TYPE (no brands);
+   Outflow is money-movement (high-level summary, no deep drill).
+   ────────────────────────────────────────────────────────────── */
+
+const DATA = {
+  customer: 'Layla',
+  period: 'This month',
+  dateLabel: '1–31 May 2026',
+  periods: ['This month', 'Last month', 'Last 3 months', 'Last 6 months', 'This year'],
+
+  inflowTotal: 24800,
+  outflowTotal: 19240,
+
+  months: ['Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'],
+  inflowSeries:  [22400, 23000, 22800, 25600, 23400, 24800],
+  outflowSeries: [20100, 24500, 19800, 21200, 22900, 19240],
+
+  // Inflow organised by TYPE — never by brand.
+  inflowTypes: [
+    { id: 'salary',    name: 'Salary & income', total: 18500, color: '#0A634D', glyph: 'salary' },
+    { id: 'transfers', name: 'Transfers in',    total: 3800,  color: '#2F8F7E', glyph: 'transfer' },
+    { id: 'gov',       name: 'Government',       total: 1500,  color: '#5C6B66', glyph: 'government' },
+    { id: 'other',     name: 'Other income',    total: 1000,  color: '#8C7BE6', glyph: 'interest' },
+  ],
+  inflowSources: [
+    { name: 'Emirates NBD Payroll',       sub: 'Salary',       total: 18500, recur: 'Monthly',   glyph: 'salary',     color: '#0A634D' },
+    { name: 'Transfer from Savings',      sub: 'Transfer in',  total: 2500,  recur: 'Monthly',   glyph: 'transfer',   color: '#2F8F7E' },
+    { name: 'Ministry of Community Dev.', sub: 'Government',    total: 1500,  recur: 'Quarterly', glyph: 'government', color: '#5C6B66' },
+    { name: 'Transfer from Ahmed K.',     sub: 'Transfer in',  total: 1300,  recur: null,        glyph: 'transfer',   color: '#2F8F7E' },
+    { name: 'Interest — Emirates NBD',    sub: 'Other income', total: 600,   recur: 'Monthly',   glyph: 'interest',   color: '#8C7BE6' },
+    { name: 'Cashback & refunds',         sub: 'Other income', total: 400,   recur: null,        glyph: 'gift',       color: '#8C7BE6' },
+  ],
+  inflowTxns: [
+    { name: 'Salary — Emirates NBD',  sub: '28 May 2026', amount: 18500, recur: true,  glyph: 'salary',     color: '#0A634D' },
+    { name: 'Transfer from Savings',  sub: '15 May 2026', amount: 2500,  recur: true,  glyph: 'transfer',   color: '#2F8F7E' },
+    { name: 'Housing Allowance',      sub: '10 May 2026', amount: 1500,  recur: false, glyph: 'government', color: '#5C6B66' },
+    { name: 'Transfer from Ahmed K.', sub: '8 May 2026',  amount: 1300,  recur: false, glyph: 'transfer',   color: '#2F8F7E' },
+    { name: 'Interest — Emirates NBD',sub: '1 May 2026',  amount: 600,   recur: true,  glyph: 'interest',   color: '#8C7BE6' },
+    { name: 'Cashback — Visa Rewards',sub: '22 May 2026', amount: 250,   recur: false, glyph: 'gift',       color: '#8C7BE6' },
+    { name: 'Refund — Noon',          sub: '18 May 2026', amount: 150,   recur: false, glyph: 'gift',       color: '#8C7BE6' },
+  ],
+
+  // Outflow high-level category summary — a GLANCE, not the Expenses drill.
+  outflowCats: [
+    { id: 'housing',   name: 'Housing',          total: 6500, color: '#3852B4', glyph: 'home' },
+    { id: 'transfers', name: 'Transfers out',    total: 3000, color: '#6B7B85', glyph: 'transfer' },
+    { id: 'bills',     name: 'Bills & utilities',total: 2180, color: '#2F8F7E', glyph: 'bolt' },
+    { id: 'shopping',  name: 'Shopping',         total: 2100, color: '#E0607A', glyph: 'bag' },
+    { id: 'groceries', name: 'Groceries',        total: 1840, color: '#E76F2E', glyph: 'cart' },
+    { id: 'dining',    name: 'Dining',           total: 1320, color: '#FF7444', glyph: 'fork' },
+    { id: 'transport', name: 'Transport',        total: 740,  color: '#5A9CB5', glyph: 'car' },
+    { id: 'other',     name: 'Other',            total: 1560, color: '#8E9A95', glyph: 'dots' },
+  ],
+  // Brand-level enrichment surfaced in Cashflow as a glance (Lune's core value).
+  outflowMerchants: [
+    { name: 'Emaar',       cat: 'Housing',           amount: 6500, glyph: 'home', color: '#3852B4' },
+    { name: 'Apple Store', cat: 'Shopping',          amount: 1200, glyph: 'bag',  color: '#E0607A' },
+    { name: 'DEWA',        cat: 'Bills & utilities', amount: 980,  glyph: 'bolt', color: '#2F8F7E' },
+    { name: 'Carrefour',   cat: 'Groceries',         amount: 640,  glyph: 'cart', color: '#E76F2E' },
+  ],
+  outflowTxns: [
+    { name: 'Rent — Emaar',         sub: '1 May 2026',  amount: 6500, glyph: 'home',     color: '#3852B4' },
+    { name: 'Transfer to Savings',  sub: '2 May 2026',  amount: 3000, glyph: 'transfer', color: '#6B7B85' },
+    { name: 'Apple Store',          sub: '14 May 2026', amount: 1200, glyph: 'bag',      color: '#E0607A' },
+    { name: 'DEWA',                 sub: '5 May 2026',  amount: 980,  glyph: 'bolt',     color: '#2F8F7E' },
+    { name: 'Carrefour',            sub: '12 May 2026', amount: 640,  glyph: 'cart',     color: '#E76F2E' },
+    { name: 'Etisalat',             sub: '7 May 2026',  amount: 420,  glyph: 'bolt',     color: '#2F8F7E' },
+    { name: 'Talabat',              sub: '20 May 2026', amount: 180,  glyph: 'fork',     color: '#FF7444' },
+    { name: 'Salik',                sub: '24 May 2026', amount: 100,  glyph: 'car',      color: '#5A9CB5' },
+  ],
+};
+
+/* ── helpers ───────────────────────────────────────────────── */
+function fmtAED(n, dec = false) {
+  const v = dec ? Number(n).toFixed(2) : Math.round(n);
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: dec ? 2 : 0, maximumFractionDigits: dec ? 2 : 0 });
+}
+// Compact form so every bar can show its value without crowding (24,800 → 24.8k)
+function fmtK(n) {
+  const a = Math.abs(n);
+  if (a >= 1000) return (Math.round(n / 100) / 10).toLocaleString('en-US') + 'k';
+  return String(Math.round(n));
+}
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/* ── theme tokens (Lune design system) ─────────────────────── */
+function makeTheme(dark, accent) {
+  return dark ? {
+    dark: true, accent,
+    bg: '#070312', surface: '#14101F', surfaceAlt: '#1B1528', sunken: '#0B0716',
+    ink: '#FFFFFF', muted: '#B8B2C4', faint: 'rgba(255,255,255,0.07)',
+    line: 'rgba(255,255,255,0.12)',
+    cardShadow: '0 1px 0 rgba(255,255,255,0.03)',
+    radius: 24, radiusSm: 12,
+    inInk: '#99F2AC', inBg: 'rgba(153,242,172,0.16)',
+    outInk: '#FF9DAE', outBg: 'rgba(242,96,118,0.16)',
+  } : {
+    dark: false, accent,
+    bg: '#F7F9F8', surface: '#FFFFFF', surfaceAlt: '#EEF2F1', sunken: '#EEF2F1',
+    ink: '#002E2A', muted: '#44524E', faint: 'rgba(7,3,18,0.05)',
+    line: '#E2E8E6',
+    cardShadow: '0 1px 3px rgba(7,3,18,0.08), 0 1px 2px rgba(7,3,18,0.04)',
+    radius: 24, radiusSm: 12,
+    inInk: '#0A634D', inBg: 'rgba(10,99,77,0.10)',
+    outInk: '#C2402F', outBg: 'rgba(194,64,47,0.09)',
+  };
+}
+
+/* ── icons ─────────────────────────────────────────────────── */
+function UIIcon({ name, size = 20, stroke = 'currentColor', sw = 1.8 }) {
+  const p = { fill: 'none', stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  const g = {
+    chevR: <path d="M9 6l6 6-6 6" {...p} />,
+    chevL: <path d="M15 6l-6 6 6 6" {...p} />,
+    chevD: <path d="M6 9l6 6 6-6" {...p} />,
+    calendar: <g {...p}><rect x="3.5" y="5" width="17" height="16" rx="3" /><path d="M3.5 9.5h17M8 3v4M16 3v4" /></g>,
+    close: <path d="M6 6l12 12M18 6L6 18" {...p} />,
+    arrowDn: <g {...p}><path d="M12 5v14M12 19l-6-6M12 19l6-6" /></g>,
+    arrowUp: <g {...p}><path d="M12 19V5M12 5l-6 6M12 5l6 6" /></g>,
+    repeat: <g {...p}><path d="M17 2l3 3-3 3" /><path d="M4 11V9a4 4 0 0 1 4-4h12" /><path d="M7 22l-3-3 3-3" /><path d="M20 13v2a4 4 0 0 1-4 4H4" /></g>,
+    check: <path d="M5 12.5l4.5 4.5L19 7" {...p} sw={2.2} />,
+    info: <g {...p}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></g>,
+    scale: <g {...p}><path d="M12 4v16M5 8h14M7 8l-3 6a3 3 0 0 0 6 0L7 8zM17 8l-3 6a3 3 0 0 0 6 0l-3-6z" /></g>,
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'block' }}>{g[name]}</svg>;
+}
+
+function Glyph({ name, size = 22, color = '#000' }) {
+  const p = { fill: 'none', stroke: color, strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  const g = {
+    salary:     <g {...p}><rect x="3" y="6" width="18" height="13" rx="3" /><path d="M3 10h18" /><circle cx="16.5" cy="14.5" r="1.6" /></g>,
+    transfer:   <g {...p}><path d="M7 8h12M19 8l-3-3M19 8l-3 3" /><path d="M17 16H5M5 16l3-3M5 16l3 3" /></g>,
+    government: <g {...p}><path d="M4 10h16M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18M12 3l8 5H4l8-5z" /></g>,
+    interest:   <g {...p}><circle cx="8" cy="8" r="3" /><circle cx="16" cy="16" r="3" /><path d="M6 18L18 6" /></g>,
+    gift:       <g {...p}><rect x="4" y="9" width="16" height="11" rx="2" /><path d="M4 13h16M12 9v11M12 9c-1.5-3-5-3-5-1s3.5 1 5 1zM12 9c1.5-3 5-3 5-1s-3.5 1-5 1z" /></g>,
+    home:       <g {...p}><path d="M4 11l8-6 8 6M6 10v9h12v-9" /><path d="M10 19v-5h4v5" /></g>,
+    bolt:       <g {...p}><path d="M13 3L5 13h6l-1 8 8-10h-6l1-8z" /></g>,
+    bag:        <g {...p}><path d="M6 8h12l-1 12H7L6 8z" /><path d="M9 8a3 3 0 0 1 6 0" /></g>,
+    cart:       <g {...p}><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.5 12h11l2-8H6" /></g>,
+    fork:       <g {...p}><path d="M7 3v7a2 2 0 0 0 4 0V3M9 10v11M17 3c-1.5 0-2.5 1.5-2.5 4s1 4 2.5 4M17 3v18" /></g>,
+    car:        <g {...p}><path d="M4 14l1.5-5h13L20 14M3 14h18v4H3zM6 18v1.5M18 18v1.5" /><circle cx="7" cy="14.5" r="1" /><circle cx="17" cy="14.5" r="1" /></g>,
+    dots:       <g fill={color} stroke="none"><circle cx="6" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="18" cy="12" r="1.7" /></g>,
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'block' }}>{g[name]}</svg>;
+}
+
+function Mark({ glyph, color, size = 42, radius = 12, dark = false, solid = false }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius, flexShrink: 0,
+      background: solid ? color : hexA(color, dark ? 0.22 : 0.13),
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Glyph name={glyph} size={size * 0.5} color={solid ? '#fff' : color} />
+    </div>
+  );
+}
+
+/* ── shared primitives ─────────────────────────────────────── */
+function Screen({ T, children }) {
+  return <div style={{ minHeight: '100%', background: T.bg, color: T.ink, paddingBottom: 44 }}>
+    <div style={{ padding: '0 18px' }}>{children}</div>
+  </div>;
+}
+function Card({ T, children, style = {}, onClick, pad = 18, className }) {
+  return <div onClick={onClick} className={className} style={{
+    background: T.surface, borderRadius: T.radius, padding: pad, boxShadow: T.cardShadow,
+    border: T.dark ? `1px solid ${T.line}` : 'none', cursor: onClick ? 'pointer' : 'default', ...style,
+  }}>{children}</div>;
+}
+function SectionTitle({ T, children, hint }) {
+  return <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', margin: '26px 2px 13px' }}>
+    <h2 style={{ margin: 0, fontSize: 17, fontWeight: 640, letterSpacing: '-0.01em', color: T.ink }}>{children}</h2>
+    {hint && <span style={{ fontSize: 12.5, fontWeight: 560, color: T.muted }}>{hint}</span>}
+  </div>;
+}
+function Tag({ T, children, color }) {
+  const c = color || T.accent;
+  return <span style={{
+    display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 620,
+    color: c, background: hexA(c, T.dark ? 0.2 : 0.12), padding: '3px 8px', borderRadius: 999,
+  }}>{children}</span>;
+}
+function PeriodPill({ T, period, onClick }) {
+  return <button onClick={onClick} className="cf-press" style={{
+    display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', marginTop: 14,
+    background: T.surface, border: `1px solid ${T.line}`, borderRadius: 999, padding: '8px 13px',
+    color: T.ink, fontSize: 13.5, fontWeight: 580, boxShadow: T.dark ? 'none' : T.cardShadow,
+  }}>
+    <span style={{ color: T.accent, display: 'flex' }}><UIIcon name="calendar" size={16} stroke={T.accent} /></span>
+    {period}
+    <UIIcon name="chevD" size={15} stroke={T.muted} />
+  </button>;
+}
+function AppHeader({ T, title, eyebrow, onBack, period, onPeriod }) {
+  return <div style={{ paddingTop: onBack ? 8 : 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 40 }}>
+      {onBack && <button onClick={onBack} aria-label="Back" className="cf-press" style={{
+        width: 38, height: 38, borderRadius: 12, flexShrink: 0, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: T.surface, border: `1px solid ${T.line}`, color: T.ink, boxShadow: T.dark ? 'none' : T.cardShadow,
+      }}><UIIcon name="chevL" size={20} /></button>}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {eyebrow && <div style={{ fontSize: 12.5, fontWeight: 600, color: T.muted }}>{eyebrow}</div>}
+        <div style={{ fontSize: 25, fontWeight: 700, letterSpacing: '-0.025em', color: T.ink, lineHeight: 1.1 }}>{title}</div>
+      </div>
+    </div>
+    {onPeriod && <PeriodPill T={T} period={period} onClick={onPeriod} />}
+  </div>;
+}
+
+/* ── charts ─────────────────────────────────────────────────── */
+// Grouped inflow-vs-outflow timeline (landing)
+function GroupedTrend({ T, months, inSeries, outSeries, height = 132 }) {
+  const peak = Math.max(...inSeries, ...outSeries);
+  const [hot, setHot] = useState(months.length - 1);
+  const i = hot;
+  const net = inSeries[i] - outSeries[i];
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 12.5, color: T.muted, fontWeight: 560 }}>{months[i]} net</div>
+          <div style={{ fontSize: 20, fontWeight: 720, color: net >= 0 ? T.inInk : T.outInk, fontVariantNumeric: 'tabular-nums' }}>
+            {net >= 0 ? '+' : '−'}AED {fmtAED(Math.abs(net))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <Legend color={T.inInk} label={`In ${fmtAED(inSeries[i])}`} />
+          <Legend color={T.outInk} label={`Out ${fmtAED(outSeries[i])}`} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height }}>
+        {months.map((m, idx) => {
+          const ih = (inSeries[idx] / peak) * (height - 26);
+          const oh = (outSeries[idx] / peak) * (height - 26);
+          const lit = hot === idx;
+          return (
+            <div key={m} onMouseEnter={() => setHot(idx)} onClick={() => setHot(idx)}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', cursor: 'pointer', borderRadius: 9, padding: '4px 0', background: lit ? (T.dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : 'transparent', transition: 'background .15s' }}>
+              <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', justifyContent: 'center', flex: 1, width: '100%' }}>
+                <div style={{ width: 9, height: ih, borderRadius: 4, background: T.inInk, opacity: lit ? 1 : 0.55, transition: 'opacity .15s', transformOrigin: 'bottom', animation: `growY .45s cubic-bezier(.22,1,.36,1) ${idx * 0.05}s both` }} />
+                <div style={{ width: 9, height: oh, borderRadius: 4, background: T.outInk, opacity: lit ? 1 : 0.55, transition: 'opacity .15s', transformOrigin: 'bottom', animation: `growY .45s cubic-bezier(.22,1,.36,1) ${idx * 0.05 + 0.02}s both` }} />
+              </div>
+              <span style={{ fontSize: 10.5, color: lit ? T.ink : T.muted, marginTop: 8, fontWeight: lit ? 660 : 520 }}>{m}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function Legend({ color, label }) {
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 580 }}>
+    <span style={{ width: 9, height: 9, borderRadius: 3, background: color }} />{label}
+  </span>;
+}
+
+// Single-series column trend (outflow / inflow over time)
+function ColumnTrend({ T, values, labels, color, height = 120 }) {
+  const peak = Math.max(...values);
+  const [hot, setHot] = useState(values.length - 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height }}>
+      {values.map((v, i) => {
+        const h = (v / peak) * (height - 34);
+        const lit = hot === i;
+        return (
+          <div key={i} onMouseEnter={() => setHot(i)} onClick={() => setHot(i)}
+            style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', cursor: 'pointer', borderRadius: 9, padding: '4px 0', background: lit ? (T.dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)') : 'transparent', transition: 'background .15s' }}>
+            <span style={{ fontSize: 10, fontWeight: lit ? 720 : 600, color: lit ? T.ink : T.muted, marginBottom: 5, transition: 'color .15s', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtK(v)}</span>
+            <div style={{ width: '100%', maxWidth: 32, height: h, borderRadius: 7, background: lit ? color : (T.dark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)'), transition: 'background .15s', transformOrigin: 'bottom', animation: `growY .45s cubic-bezier(.22,1,.36,1) ${i * 0.06}s both` }} />
+            <span style={{ fontSize: 10.5, color: lit ? T.ink : T.muted, marginTop: 8, fontWeight: lit ? 600 : 520 }}>{labels[i]}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Stacked single bar + legend (breakdown by type / by category)
+function StackedBar({ T, data, total, onSeg }) {
+  const [hot, setHot] = useState(null);
+  return (
+    <div>
+      <div style={{ display: 'flex', height: 46, borderRadius: 14, overflow: 'hidden', gap: 3 }}>
+        {data.map((d, i) => {
+          const pct = (d.total / total) * 100;
+          const dim = hot != null && hot !== d.id;
+          return <div key={d.id} onMouseEnter={() => setHot(d.id)} onMouseLeave={() => setHot(null)} onClick={() => onSeg && onSeg(d.id)}
+            style={{ width: `${pct}%`, background: d.color, height: '100%', borderRadius: 7, minWidth: 4, cursor: onSeg ? 'pointer' : 'default', opacity: dim ? 0.4 : 1, transition: 'opacity .18s', transformOrigin: 'left center', animation: `growX .45s cubic-bezier(.22,1,.36,1) ${i * 0.04}s both` }} />;
+        })}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 14px', marginTop: 16 }}>
+        {data.map((d) => {
+          const share = Math.round((d.total / total) * 100);
+          const dim = hot != null && hot !== d.id;
+          return <div key={d.id} onMouseEnter={() => setHot(d.id)} onMouseLeave={() => setHot(null)} onClick={() => onSeg && onSeg(d.id)}
+            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', margin: '0 -8px', borderRadius: 9, cursor: onSeg ? 'pointer' : 'default', background: hot === d.id ? (T.dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)') : 'transparent', opacity: dim ? 0.5 : 1, transition: 'opacity .18s, background .18s' }}>
+            <span style={{ width: 9, height: 9, borderRadius: 3, background: d.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: T.ink, fontWeight: 520, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
+            <span style={{ fontSize: 12.5, color: T.muted, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{share}%</span>
+          </div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── rows ───────────────────────────────────────────────────── */
+function FlowRow({ T, item, sign, divider }) {
+  const c = sign === '+' ? T.inInk : T.outInk;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '11px 0', position: 'relative' }}>
+      <Mark glyph={item.glyph} color={item.color} dark={T.dark} size={42} radius={12} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontSize: 15, fontWeight: 560, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+          {item.recur && <span style={{ display: 'flex', color: T.muted }}><UIIcon name="repeat" size={13} stroke={T.muted} /></span>}
+        </div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 2 }}>{item.sub}</div>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 620, color: c, fontVariantNumeric: 'tabular-nums' }}>{sign}AED {fmtAED(item.amount)}</div>
+      {divider && <div style={{ position: 'absolute', left: 55, right: 0, bottom: 0, height: 1, background: T.faint }} />}
+    </div>
+  );
+}
+function SummaryRow({ T, item, total, divider }) {
+  const share = Math.round((item.total / total) * 100);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 0', position: 'relative' }}>
+      <Mark glyph={item.glyph} color={item.color} dark={T.dark} size={42} radius={12} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+          <span style={{ fontSize: 15, fontWeight: 560, color: T.ink }}>{item.name}</span>
+          <span style={{ fontSize: 15, fontWeight: 620, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>AED {fmtAED(item.total)}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7 }}>
+          <div style={{ flex: 1, height: 5, borderRadius: 999, background: T.dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${share}%`, background: item.color, borderRadius: 999 }} />
+          </div>
+          <span style={{ fontSize: 12, color: T.muted, fontWeight: 540, width: 38, textAlign: 'right' }}>{share}%</span>
+        </div>
+      </div>
+      {divider && <div style={{ position: 'absolute', left: 55, right: 0, bottom: 0, height: 1, background: T.faint }} />}
+    </div>
+  );
+}
+
+/* ── bottom sheet (period picker) ──────────────────────────── */
+function Sheet({ T, open, onClose, title, children }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 200, pointerEvents: open ? 'auto' : 'none' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', opacity: open ? 1 : 0, transition: 'opacity .3s' }} />
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: T.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '88%', transform: open ? 'translateY(0)' : 'translateY(102%)', transition: 'transform .42s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 -10px 40px rgba(0,0,0,0.25)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px 10px' }}>
+          <div style={{ fontSize: 18, fontWeight: 680, color: T.ink, letterSpacing: '-0.02em' }}>{title}</div>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 999, border: 'none', cursor: 'pointer', background: T.faint, color: T.muted, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><UIIcon name="close" size={16} stroke={T.muted} /></button>
+        </div>
+        <div style={{ overflow: 'auto', padding: '0 18px 26px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+function PeriodSheet({ T, open, onClose, period, onPick }) {
+  return (
+    <Sheet T={T} open={open} onClose={onClose} title="Period">
+      <Card T={T} pad="2px 18px">
+        {DATA.periods.map((p, i) => {
+          const active = p === period;
+          return <div key={p} onClick={() => { onPick(p); onClose(); }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 0', cursor: 'pointer', position: 'relative' }}>
+            <span style={{ fontSize: 15.5, color: T.ink, fontWeight: active ? 620 : 500 }}>{p}</span>
+            {active && <span style={{ color: T.accent, display: 'flex' }}><UIIcon name="check" size={20} stroke={T.accent} /></span>}
+            {i < DATA.periods.length - 1 && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, background: T.faint }} />}
+          </div>;
+        })}
+      </Card>
+      <div style={{ textAlign: 'center', fontSize: 13, color: T.muted, marginTop: 16 }}>Showing {DATA.dateLabel}</div>
+    </Sheet>
+  );
+}
+
+/* ── SCREEN 1 — Landing ─────────────────────────────────────── */
+function Landing({ T, period, onPeriod, nav }) {
+  const net = DATA.inflowTotal - DATA.outflowTotal;
+  const pos = net >= 0;
+  return (
+    <Screen T={T}>
+      <AppHeader T={T} eyebrow={`Good evening, ${DATA.customer}`} title="Cashflow" period={period} onPeriod={onPeriod} />
+
+      {/* Net hero */}
+      <Card T={T} style={{ marginTop: 18 }}>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Net this period</div>
+        <div style={{ fontSize: 40, fontWeight: 760, letterSpacing: '-0.03em', marginTop: 4, color: pos ? T.inInk : T.outInk, fontVariantNumeric: 'tabular-nums' }}>
+          {pos ? '+' : '−'}<span style={{ fontSize: 22, fontWeight: 620, marginRight: 2 }}>AED</span>{fmtAED(Math.abs(net))}
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 13, fontWeight: 600, color: pos ? T.inInk : T.outInk, background: pos ? T.inBg : T.outBg, padding: '5px 11px', borderRadius: 999 }}>
+          <UIIcon name={pos ? 'arrowUp' : 'arrowDn'} size={14} stroke={pos ? T.inInk : T.outInk} />
+          {pos ? "You're net positive this month" : 'You spent more than came in'}
+        </div>
+        <div style={{ display: 'flex', marginTop: 20, gap: 14 }}>
+          <MiniStat T={T} label="Money in" value={DATA.inflowTotal} color={T.inInk} dir="in" />
+          <div style={{ width: 1, background: T.faint }} />
+          <MiniStat T={T} label="Money out" value={DATA.outflowTotal} color={T.outInk} dir="out" />
+        </div>
+      </Card>
+
+      {/* Timeline */}
+      <SectionTitle T={T} hint="Last 6 months">Cashflow over time</SectionTitle>
+      <Card T={T}><GroupedTrend T={T} months={DATA.months} inSeries={DATA.inflowSeries} outSeries={DATA.outflowSeries} /></Card>
+
+      {/* Entry points */}
+      <SectionTitle T={T}>Explore</SectionTitle>
+      <EntryCard T={T} dir="in" title="Inflow" sub="Where your money comes from" total={DATA.inflowTotal} onClick={() => nav('inflow')} />
+      <div style={{ height: 12 }} />
+      <EntryCard T={T} dir="out" title="Outflow" sub="Where your money goes" total={DATA.outflowTotal} onClick={() => nav('outflow')} />
+    </Screen>
+  );
+}
+function MiniStat({ T, label, value, color, dir }) {
+  return <div style={{ flex: 1 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <span style={{ width: 22, height: 22, borderRadius: 7, background: hexA(color, T.dark ? 0.22 : 0.13), color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <UIIcon name={dir === 'in' ? 'arrowDn' : 'arrowUp'} size={14} stroke={color} />
+      </span>
+      <span style={{ fontSize: 12.5, color: T.muted, fontWeight: 560 }}>{label}</span>
+    </div>
+    <div style={{ fontSize: 19, fontWeight: 700, marginTop: 7, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: T.muted, marginRight: 3 }}>AED</span>{fmtAED(value)}
+    </div>
+  </div>;
+}
+function EntryCard({ T, dir, title, sub, total, onClick }) {
+  const color = dir === 'in' ? T.inInk : T.outInk;
+  return (
+    <Card T={T} onClick={onClick} pad={16} className="cf-press" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <span style={{ width: 46, height: 46, borderRadius: 14, background: hexA(color, T.dark ? 0.2 : 0.12), color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <UIIcon name={dir === 'in' ? 'arrowDn' : 'arrowUp'} size={24} stroke={color} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 17, fontWeight: 680, color: T.ink }}>{title}</div>
+        <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>{sub}</div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{dir === 'in' ? '+' : '−'}AED {fmtAED(total)}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 3 }}><UIIcon name="chevR" size={18} stroke={T.muted} /></div>
+      </div>
+    </Card>
+  );
+}
+
+/* ── SCREEN 2 — Outflow (money-movement lens) ──────────────── */
+function Outflow({ T, period, onPeriod, nav }) {
+  const out = DATA.outflowTotal, inn = DATA.inflowTotal, net = inn - out;
+  const peak = Math.max(inn, out);
+  return (
+    <Screen T={T}>
+      <AppHeader T={T} title="Outflow" eyebrow="Cashflow" onBack={() => nav('back')} period={period} onPeriod={onPeriod} />
+
+      {/* Total out */}
+      <Card T={T} style={{ marginTop: 18 }}>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total out · {DATA.dateLabel}</div>
+        <div style={{ fontSize: 38, fontWeight: 760, letterSpacing: '-0.03em', marginTop: 4, color: T.outInk, fontVariantNumeric: 'tabular-nums' }}>
+          −<span style={{ fontSize: 21, fontWeight: 620, marginRight: 2 }}>AED</span>{fmtAED(out)}
+        </div>
+
+        {/* Net vs inflow */}
+        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${T.faint}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Out vs in</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: net >= 0 ? T.inInk : T.outInk }}>{net >= 0 ? 'Net +' : 'Net −'}AED {fmtAED(Math.abs(net))}</span>
+          </div>
+          <CompareBar T={T} label="In" value={inn} peak={peak} color={T.inInk} />
+          <CompareBar T={T} label="Out" value={out} peak={peak} color={T.outInk} />
+        </div>
+      </Card>
+
+      {/* Outflow over time */}
+      <SectionTitle T={T} hint="Last 6 months">Outflow over time</SectionTitle>
+      <Card T={T}><ColumnTrend T={T} values={DATA.outflowSeries} labels={DATA.months} color={T.outInk} /></Card>
+
+      {/* High-level summary — a glance, NOT a drill */}
+      <SectionTitle T={T} hint="High-level">Where it went</SectionTitle>
+      <Card T={T}>
+        <StackedBar T={T} data={DATA.outflowCats} total={out} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 16, padding: '10px 12px', borderRadius: 12, background: T.dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+          <span style={{ color: T.muted, display: 'flex' }}><UIIcon name="info" size={15} stroke={T.muted} /></span>
+          <span style={{ fontSize: 12, color: T.muted, lineHeight: 1.45 }}>A summary of money movement. For the full category &amp; brand drill-down, see <b style={{ color: T.ink }}>Expenses</b>.</span>
+        </div>
+      </Card>
+
+      {/* Brand-level enrichment — Lune's core value, shown as a read-only glance (no drill) */}
+      <SectionTitle T={T} hint="Enriched by Lune">Top merchants</SectionTitle>
+      <Card T={T} pad="6px 16px">
+        {DATA.outflowMerchants.map((m, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 0', position: 'relative' }}>
+            <Mark glyph={m.glyph} color={m.color} dark={T.dark} size={42} radius={12} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 560, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</div>
+              <div style={{ marginTop: 6 }}><Tag T={T} color={m.color}>{m.cat}</Tag></div>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 620, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>−AED {fmtAED(m.amount)}</div>
+            {i < DATA.outflowMerchants.length - 1 && <div style={{ position: 'absolute', left: 55, right: 0, bottom: 0, height: 1, background: T.faint }} />}
+          </div>
+        ))}
+      </Card>
+
+      {/* Transactions */}
+      <SectionTitle T={T} hint={`${DATA.outflowTxns.length} this period`}>Transactions</SectionTitle>
+      <Card T={T} pad="6px 16px">
+        {DATA.outflowTxns.map((t, i) => <FlowRow key={i} T={T} item={t} sign="−" divider={i < DATA.outflowTxns.length - 1} />)}
+      </Card>
+    </Screen>
+  );
+}
+function CompareBar({ T, label, value, peak, color }) {
+  return <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+    <span style={{ width: 26, fontSize: 12, fontWeight: 620, color: T.muted }}>{label}</span>
+    <div style={{ flex: 1, height: 12, borderRadius: 999, background: T.dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+      <div style={{ height: '100%', width: `${(value / peak) * 100}%`, background: color, borderRadius: 999, transformOrigin: 'left', animation: 'growX .45s cubic-bezier(.22,1,.36,1) both' }} />
+    </div>
+    <span style={{ width: 78, textAlign: 'right', fontSize: 12.5, fontWeight: 640, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>AED {fmtAED(value)}</span>
+  </div>;
+}
+
+/* ── SCREEN 3 — Inflow (income source / stability lens) ────── */
+function Inflow({ T, period, onPeriod, nav }) {
+  const inn = DATA.inflowTotal;
+  const series = DATA.inflowSeries;
+  const hi = Math.max(...series), lo = Math.min(...series), avg = series.reduce((a, b) => a + b, 0) / series.length;
+  const variation = Math.round(((hi - lo) / 2 / avg) * 100); // ± band
+  const salaryRecur = DATA.inflowSources.filter(s => s.recur).length;
+  return (
+    <Screen T={T}>
+      <AppHeader T={T} title="Inflow" eyebrow="Cashflow" onBack={() => nav('back')} period={period} onPeriod={onPeriod} />
+
+      {/* Total in */}
+      <Card T={T} style={{ marginTop: 18 }}>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total in · {DATA.dateLabel}</div>
+        <div style={{ fontSize: 38, fontWeight: 760, letterSpacing: '-0.03em', marginTop: 4, color: T.inInk, fontVariantNumeric: 'tabular-nums' }}>
+          +<span style={{ fontSize: 21, fontWeight: 620, marginRight: 2 }}>AED</span>{fmtAED(inn)}
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, fontSize: 13, fontWeight: 600, color: T.inInk, background: T.inBg, padding: '5px 11px', borderRadius: 999 }}>
+          <UIIcon name="repeat" size={14} stroke={T.inInk} />
+          Steady income · varied ±{variation}% over 6 months
+        </div>
+      </Card>
+
+      {/* Breakdown by TYPE (no brands) */}
+      <SectionTitle T={T} hint="By type">Income breakdown</SectionTitle>
+      <Card T={T}><StackedBar T={T} data={DATA.inflowTypes} total={inn} /></Card>
+
+      {/* Income stability over time */}
+      <SectionTitle T={T} hint="Last 6 months">Income stability</SectionTitle>
+      <Card T={T}>
+        <div style={{ display: 'flex', gap: 18, marginBottom: 16 }}>
+          <Stat T={T} label="Lowest" value={lo} />
+          <Stat T={T} label="Average" value={Math.round(avg)} />
+          <Stat T={T} label="Highest" value={hi} />
+        </div>
+        <ColumnTrend T={T} values={series} labels={DATA.months} color={T.inInk} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 16, padding: '10px 12px', borderRadius: 12, background: T.dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+          <span style={{ color: T.inInk, display: 'flex' }}><UIIcon name="repeat" size={15} stroke={T.inInk} /></span>
+          <span style={{ fontSize: 12, color: T.muted, lineHeight: 1.45 }}><b style={{ color: T.ink }}>{salaryRecur} of {DATA.inflowSources.length}</b> sources recur regularly — your salary lands every month.</span>
+        </div>
+      </Card>
+
+      {/* Top sources (sources, never brands) */}
+      <SectionTitle T={T} hint="Enriched by Lune">Top sources</SectionTitle>
+      <Card T={T} pad="6px 16px">
+        {DATA.inflowSources.map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 0', position: 'relative' }}>
+            <Mark glyph={s.glyph} color={s.color} dark={T.dark} size={42} radius={12} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 560, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 12.5, color: T.muted }}>{s.sub}</span>
+                {s.recur && <Tag T={T} color={T.inInk}><UIIcon name="repeat" size={11} stroke={T.inInk} />{s.recur}</Tag>}
+              </div>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 620, color: T.inInk, fontVariantNumeric: 'tabular-nums' }}>+AED {fmtAED(s.total)}</div>
+            {i < DATA.inflowSources.length - 1 && <div style={{ position: 'absolute', left: 55, right: 0, bottom: 0, height: 1, background: T.faint }} />}
+          </div>
+        ))}
+      </Card>
+
+      {/* Transactions */}
+      <SectionTitle T={T} hint={`${DATA.inflowTxns.length} this period`}>Transactions</SectionTitle>
+      <Card T={T} pad="6px 16px">
+        {DATA.inflowTxns.map((t, i) => <FlowRow key={i} T={T} item={t} sign="+" divider={i < DATA.inflowTxns.length - 1} />)}
+      </Card>
+    </Screen>
+  );
+}
+function Stat({ T, label, value }) {
+  return <div style={{ flex: 1 }}>
+    <div style={{ fontSize: 12, color: T.muted, fontWeight: 560 }}>{label}</div>
+    <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginRight: 2 }}>AED</span>{fmtAED(value)}
+    </div>
+  </div>;
+}
+
+/* ── device chrome ─────────────────────────────────────────── */
+function StatusBar({ T }) {
+  const c = T.ink;
+  return (
+    <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 28px 0 34px', position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30 }}>
+      <span style={{ fontSize: 16, fontWeight: 680, color: c, letterSpacing: '-0.02em' }}>9:41</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <svg width="18" height="12" viewBox="0 0 18 12"><g fill={c}><rect x="0" y="7" width="3" height="5" rx="1" /><rect x="5" y="4.5" width="3" height="7.5" rx="1" /><rect x="10" y="2" width="3" height="10" rx="1" /><rect x="15" y="0" width="3" height="12" rx="1" /></g></svg>
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none"><path d="M8.5 3.2c2 0 3.8.8 5.2 2.1M8.5 3.2C6.5 3.2 4.7 4 3.3 5.3M8.5 7c1 0 1.9.4 2.6 1M8.5 7c-1 0-1.9.4-2.6 1" stroke={c} strokeWidth="1.5" strokeLinecap="round" /><circle cx="8.5" cy="10.3" r="1" fill={c} /></svg>
+        <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1" width="21" height="10" rx="3" fill="none" stroke={c} strokeOpacity="0.4" /><rect x="2" y="2.5" width="17" height="7" rx="1.5" fill={c} /><rect x="23" y="4" width="2" height="4" rx="1" fill={c} fillOpacity="0.5" /></svg>
+      </div>
+    </div>
+  );
+}
+
+function ThemePanel({ accent, dark, onAccent, onDark }) {
+  const accents = ['#10A37F', '#002E2A', '#3852B4', '#469A93', '#C2402F'];
+  return (
+    <div style={{ width: 210, alignSelf: 'flex-start', flexShrink: 0, background: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderRadius: 18, padding: 16, boxShadow: '0 8px 30px rgba(0,0,0,0.12)', border: '0.5px solid rgba(0,0,0,0.08)', fontSize: 12.5, color: '#29261b' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#8a8a8a', marginBottom: 12 }}>White-label theming</div>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>Accent</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {accents.map(a => <button key={a} onClick={() => onAccent(a)} className="cf-press" style={{ width: 26, height: 26, borderRadius: 999, background: a, border: accent === a ? '2px solid #29261b' : '2px solid transparent', cursor: 'pointer', boxShadow: 'inset 0 0 0 2px #fff' }} />)}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontWeight: 600 }}>Dark mode</span>
+        <button onClick={() => onDark(!dark)} style={{ width: 42, height: 25, borderRadius: 999, border: 'none', cursor: 'pointer', background: dark ? '#34c759' : 'rgba(0,0,0,0.15)', position: 'relative', transition: 'background .15s' }}>
+          <span style={{ position: 'absolute', top: 2.5, left: 2.5, width: 20, height: 20, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.25)', transform: dark ? 'translateX(17px)' : 'translateX(0)', transition: 'transform .15s ease-out' }} />
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: '#9a9a9a', lineHeight: 1.5, marginTop: 12 }}>Every accent re-themes all three screens — banks brand the module without layout changes.</div>
+    </div>
+  );
+}
+
+/* ── app ───────────────────────────────────────────────────── */
+function CashflowApp() {
+  const [accent, setAccent] = useState('#10A37F');
+  const [dark, setDark] = useState(false);
+  const T = makeTheme(dark, accent);
+
+  const [stack, setStack] = useState([{ screen: 'landing' }]);
+  const [anim, setAnim] = useState('fwd');
+  const [period, setPeriod] = useState(DATA.period);
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const scroller = useRef(null);
+
+  const nav = (to) => {
+    if (to === 'back') { setAnim('back'); setStack(s => s.length > 1 ? s.slice(0, -1) : s); }
+    else { setAnim('fwd'); setStack(s => [...s, { screen: to }]); }
+  };
+  const top = stack[stack.length - 1];
+  useEffect(() => { if (scroller.current) scroller.current.scrollTop = 0; }, [stack.length]);
+
+  const render = () => {
+    const common = { T, period, onPeriod: () => setPeriodOpen(true), nav };
+    if (top.screen === 'outflow') return <Outflow {...common} />;
+    if (top.screen === 'inflow') return <Inflow {...common} />;
+    return <Landing {...common} />;
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32, flexWrap: 'wrap', background: dark ? '#030109' : '#E2E8E6', padding: 24, boxSizing: 'border-box', transition: 'background .3s' }}>
+      <div style={{ width: 390, height: 844, borderRadius: 48, overflow: 'hidden', position: 'relative', background: T.bg, boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)' }}>
+        {/* dynamic island */}
+        <div style={{ position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)', width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50 }} />
+        <StatusBar T={T} />
+        <div ref={scroller} className="cf-screens" style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', paddingTop: 56 }}>
+          <div key={stack.length + '-' + top.screen} className={anim === 'fwd' ? 'slide-fwd' : 'slide-back'}>{render()}</div>
+        </div>
+        <PeriodSheet T={T} open={periodOpen} onClose={() => setPeriodOpen(false)} period={period} onPick={setPeriod} />
+        {/* home indicator */}
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60, height: 34, display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 8, pointerEvents: 'none' }}>
+          <div style={{ width: 139, height: 5, borderRadius: 100, background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)' }} />
+        </div>
+      </div>
+      <ThemePanel accent={accent} dark={dark} onAccent={setAccent} onDark={setDark} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<CashflowApp />);
+</script>
+</body>
+</html>
