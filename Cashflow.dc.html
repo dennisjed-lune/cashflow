@@ -1200,20 +1200,134 @@ function Sheet({ T, open, onClose, title, children }) {
     </div>
   );
 }
+/* ── date helpers (period presets + range formatting) ─────────────── */
+const NOW = new Date();
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const eom = (y, m) => new Date(y, m + 1, 0);
+const sameDay = (a, b) => a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const dayKey = (d) => d.getFullYear() * 1e4 + d.getMonth() * 100 + d.getDate();
+function presetRange(label, today) {
+  const y = today.getFullYear(), m = today.getMonth();
+  switch (label) {
+    case 'Last month': return [new Date(y, m - 1, 1), eom(y, m - 1)];
+    case 'Last 3 months': return [new Date(y, m - 2, 1), eom(y, m)];
+    case 'Last 6 months': return [new Date(y, m - 5, 1), eom(y, m)];
+    case 'This year': return [new Date(y, 0, 1), new Date(y, 11, 31)];
+    default: return [new Date(y, m, 1), eom(y, m)]; // This month
+  }
+}
+function fmtRange(s, e) {
+  const sy = s.getFullYear(), ey = e.getFullYear(), sm = s.getMonth(), em = e.getMonth();
+  if (sameDay(s, e)) return `${s.getDate()} ${MON[sm]} ${sy}`;
+  if (sy === ey && sm === em) return `${s.getDate()}–${e.getDate()} ${MON[sm]} ${sy}`;
+  if (sy === ey) return `${s.getDate()} ${MON[sm]} – ${e.getDate()} ${MON[em]} ${sy}`;
+  return `${s.getDate()} ${MON[sm]} ${sy} – ${e.getDate()} ${MON[em]} ${ey}`;
+}
+
+/* ── calendar (custom range picker) ───────────────────────────────── */
+function Calendar({ T, view, setView, start, end, onPick }) {
+  const y = view.getFullYear(), m = view.getMonth();
+  const lead = new Date(y, m, 1).getDay();
+  const days = eom(y, m).getDate();
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(new Date(y, m, d));
+  const inRange = (d) => start && end && dayKey(d) > dayKey(start) && dayKey(d) < dayKey(end);
+  const nav = (delta) => setView(new Date(y, m + delta, 1));
+  const navBtn = (dir, dis) => (
+    <button onClick={() => !dis && nav(dir)} disabled={dis} style={{ width: 34, height: 34, borderRadius: 999, border: 'none', cursor: dis ? 'default' : 'pointer', background: T.faint, color: dis ? T.muted : T.ink, opacity: dis ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <UIIcon name={dir < 0 ? 'chevL' : 'chevR'} size={16} stroke={dis ? T.muted : T.ink} />
+    </button>
+  );
+  const future = new Date(NOW.getFullYear(), NOW.getMonth(), 1);
+  return (
+    <Card T={T} style={{ marginTop: 12, padding: '14px 14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        {navBtn(-1, false)}
+        <div style={{ fontSize: 14.5, fontWeight: 660, color: T.ink, letterSpacing: '-0.01em' }}>{MON[m]} {y}</div>
+        {navBtn(1, dayKey(new Date(y, m, 1)) >= dayKey(future))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 2 }}>
+        {DOW.map((d, i) => <div key={i} style={{ textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.muted, padding: '4px 0' }}>{d}</div>)}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '2px 0' }}>
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const isStart = sameDay(d, start), isEnd = sameDay(d, end), mid = inRange(d);
+          const isFuture = dayKey(d) > dayKey(NOW);
+          const endpoint = isStart || isEnd;
+          return (
+            <div key={i} style={{ position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', height: 38 }}>
+              {mid && <div style={{ position: 'absolute', inset: '4px 0', background: hexA(T.accent, T.dark ? 0.22 : 0.12) }} />}
+              {(isStart && end) && <div style={{ position: 'absolute', top: 4, bottom: 4, left: '50%', right: 0, background: hexA(T.accent, T.dark ? 0.22 : 0.12) }} />}
+              {(isEnd && start && !sameDay(start, end)) && <div style={{ position: 'absolute', top: 4, bottom: 4, right: '50%', left: 0, background: hexA(T.accent, T.dark ? 0.22 : 0.12) }} />}
+              <button onClick={() => !isFuture && onPick(d)} disabled={isFuture} className="cf-press"
+                style={{ position: 'relative', width: 34, height: 34, borderRadius: 999, border: 'none', cursor: isFuture ? 'default' : 'pointer', fontSize: 14, fontWeight: endpoint ? 680 : 500, fontVariantNumeric: 'tabular-nums', background: endpoint ? T.accent : 'transparent', color: endpoint ? '#fff' : isFuture ? T.muted : T.ink, opacity: isFuture ? 0.32 : 1, fontFamily: 'inherit' }}>
+                {d.getDate()}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function PeriodSheet({ T, open, onClose, period, onPick }) {
+  const [view, setView] = useState(() => new Date(NOW.getFullYear(), NOW.getMonth(), 1));
+  const [start, setStart] = useState(null);
+  const [end, setEnd] = useState(null);
+
+  // Reset the custom-range draft each time the sheet opens.
+  useEffect(() => { if (open) { setStart(null); setEnd(null); setView(new Date(NOW.getFullYear(), NOW.getMonth(), 1)); } }, [open]);
+
+  const pickDay = (d) => {
+    if (!start || (start && end)) { setStart(d); setEnd(null); }
+    else if (dayKey(d) < dayKey(start)) { setEnd(start); setStart(d); }
+    else setEnd(d);
+  };
+  const applyCustom = () => {
+    const s = start, e = end || start;
+    onPick(fmtRange(s, e), fmtRange(s, e));
+    onClose();
+  };
+  const pickPreset = (p) => {
+    const [s, e] = presetRange(p, NOW);
+    onPick(p, fmtRange(s, e));
+    onClose();
+  };
+
   return (
     <Sheet T={T} open={open} onClose={onClose} title="Period">
       <Card T={T} pad="2px 18px">
         {DATA.periods.map((p, i) => {
           const active = p === period;
-          return <div key={p} onClick={() => { onPick(p); onClose(); }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 0', cursor: 'pointer', position: 'relative' }}>
+          return <div key={p} onClick={() => pickPreset(p)} className="cf-press" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', cursor: 'pointer', position: 'relative' }}>
             <span style={{ fontSize: 15.5, color: T.ink, fontWeight: active ? 620 : 500 }}>{p}</span>
             {active && <span style={{ color: T.accent, display: 'flex' }}><UIIcon name="check" size={20} stroke={T.accent} /></span>}
             {i < DATA.periods.length - 1 && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, background: T.faint }} />}
           </div>;
         })}
       </Card>
-      <div style={{ textAlign: 'center', fontSize: 13, color: T.muted, marginTop: 16 }}>Showing {DATA.dateLabel}</div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 2px 2px' }}>
+        <div style={{ height: 1, flex: 1, background: T.line }} />
+        <span style={{ fontSize: 11.5, fontWeight: 680, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.muted }}>Or pick a range</span>
+        <div style={{ height: 1, flex: 1, background: T.line }} />
+      </div>
+
+      <Calendar T={T} view={view} setView={setView} start={start} end={end} onPick={pickDay} />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 16 }}>
+        <span style={{ fontSize: 13.5, color: start ? T.ink : T.muted, fontWeight: start ? 600 : 500 }}>
+          {start ? fmtRange(start, end || start) : 'Select a start & end date'}
+        </span>
+        <button onClick={applyCustom} disabled={!start} className="cf-press"
+          style={{ flexShrink: 0, padding: '11px 22px', borderRadius: 999, border: 'none', cursor: start ? 'pointer' : 'default', background: start ? T.accent : T.faint, color: start ? '#fff' : T.muted, opacity: start ? 1 : 0.7, fontSize: 14.5, fontWeight: 660, fontFamily: 'inherit' }}>
+          Apply
+        </button>
+      </div>
     </Sheet>
   );
 }
@@ -1376,13 +1490,13 @@ function TimelineSheet({ T, open, onClose }) {
     </Sheet>
   );
 }
-function Landing({ T, period, onPeriod, nav, onTimeline }) {
+function Landing({ T, period, dateLabel, onPeriod, nav, onTimeline }) {
   const net = DATA.inflowTotal - DATA.outflowTotal;
   return (
     <Screen T={T}>
       <AppHeader T={T} eyebrow={`Good evening, ${DATA.customer}`} title="Cashflow" period={period} onPeriod={onPeriod} />
       <Card T={T} style={{ marginTop: 18 }}>
-        <div style={{ textAlign: 'center', fontSize: 13, color: T.muted, fontWeight: 580 }}>Cashflow · {DATA.dateLabel}</div>
+        <div style={{ textAlign: 'center', fontSize: 13, color: T.muted, fontWeight: 580 }}>Cashflow · {dateLabel}</div>
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16, marginBottom: 4 }}>
           <DuoDonut T={T} inflow={DATA.inflowTotal} outflow={DATA.outflowTotal} net={net} period={period} />
         </div>
@@ -1441,13 +1555,13 @@ function MovementSection({ T, data, total }) {
     </>
   );
 }
-function Outflow({ T, period, onPeriod, nav, showLogos }) {
+function Outflow({ T, period, dateLabel, onPeriod, nav, showLogos }) {
   const out = DATA.outflowTotal;
   return (
     <Screen T={T}>
       <AppHeader T={T} title="Outflow" eyebrow="Cashflow" onBack={() => nav('back')} period={period} onPeriod={onPeriod} />
       <Card T={T} style={{ marginTop: 18 }}>
-        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total out · {DATA.dateLabel}</div>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total out · {dateLabel}</div>
         <div style={{ fontSize: 38, fontWeight: 760, letterSpacing: '-0.03em', marginTop: 4, color: T.outInk, fontVariantNumeric: 'tabular-nums' }}>
           −<span style={{ fontSize: 21, fontWeight: 620, marginRight: 2 }}>AED</span>{fmtAED(out)}
         </div>
@@ -1491,7 +1605,7 @@ function Stat({ T, label, value }) {
     </div>
   </div>;
 }
-function Inflow({ T, period, onPeriod, nav, showLogos }) {
+function Inflow({ T, period, dateLabel, onPeriod, nav, showLogos }) {
   const inn = DATA.inflowTotal, series = DATA.inflowSeries;
   const hi = Math.max(...series), lo = Math.min(...series), avg = series.reduce((a, b) => a + b, 0) / series.length;
   const variation = Math.round(((hi - lo) / 2 / avg) * 100);
@@ -1500,7 +1614,7 @@ function Inflow({ T, period, onPeriod, nav, showLogos }) {
     <Screen T={T}>
       <AppHeader T={T} title="Inflow" eyebrow="Cashflow" onBack={() => nav('back')} period={period} onPeriod={onPeriod} />
       <Card T={T} style={{ marginTop: 18 }}>
-        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total in · {DATA.dateLabel}</div>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 580 }}>Total in · {dateLabel}</div>
         <div style={{ fontSize: 38, fontWeight: 760, letterSpacing: '-0.03em', marginTop: 4, color: T.inInk, fontVariantNumeric: 'tabular-nums' }}>
           +<span style={{ fontSize: 21, fontWeight: 620, marginRight: 2 }}>AED</span>{fmtAED(inn)}
         </div>
@@ -1580,6 +1694,7 @@ function CashflowApp(props) {
   const [stack, setStack] = useState([{ screen: 'landing' }]);
   const [anim, setAnim] = useState('fwd');
   const [period, setPeriod] = useState(DATA.period);
+  const [dateLabel, setDateLabel] = useState(() => { const [s, e] = presetRange('This month', NOW); return fmtRange(s, e); });
   const [periodOpen, setPeriodOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const scroller = useRef(null);
@@ -1592,7 +1707,7 @@ function CashflowApp(props) {
   useEffect(() => { if (scroller.current) scroller.current.scrollTop = 0; }, [stack.length]);
 
   const render = () => {
-    const common = { T, period, onPeriod: () => setPeriodOpen(true), nav, showLogos, onTimeline: () => setTimelineOpen(true) };
+    const common = { T, period, dateLabel, onPeriod: () => setPeriodOpen(true), nav, showLogos, onTimeline: () => setTimelineOpen(true) };
     if (top.screen === 'outflow') return <Outflow {...common} />;
     if (top.screen === 'inflow') return <Inflow {...common} />;
     return <Landing {...common} />;
@@ -1606,7 +1721,7 @@ function CashflowApp(props) {
         <div ref={scroller} className="cf-screens" style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', paddingTop: 56 }}>
           <div key={stack.length + '-' + top.screen} className={anim === 'fwd' ? 'slide-fwd' : 'slide-back'}>{render()}</div>
         </div>
-        <PeriodSheet T={T} open={periodOpen} onClose={() => setPeriodOpen(false)} period={period} onPick={setPeriod} />
+        <PeriodSheet T={T} open={periodOpen} onClose={() => setPeriodOpen(false)} period={period} onPick={(p, dl) => { setPeriod(p); if (dl) setDateLabel(dl); }} />
         <TimelineSheet T={T} open={timelineOpen} onClose={() => setTimelineOpen(false)} />
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60, height: 34, display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 8, pointerEvents: 'none' }}>
           <div style={{ width: 139, height: 5, borderRadius: 100, background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)' }} />
