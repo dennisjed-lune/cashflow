@@ -468,21 +468,6 @@ function DonutLegend({ segments }) {
   );
 }
 
-/* landing area sparkline */
-function AreaSpark({ points, color = T.green, width = 132, height = 64 }) {
-  const max = Math.max(...points, 1), min = Math.min(...points, 0);
-  const xs = points.map((p, i) => [ (i / (points.length - 1)) * width, height - 6 - ((p - min) / (max - min || 1)) * (height - 16) ]);
-  const line = xs.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
-      <defs><linearGradient id="spark" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={hexA(color, 0.25)} /><stop offset="100%" stopColor={hexA(color, 0)} /></linearGradient></defs>
-      <path d={`${line} L${width},${height} L0,${height} Z`} fill="url(#spark)" />
-      <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" />
-      {xs.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={i === xs.length - 1 ? 3.2 : 2.2} fill={color} />)}
-    </svg>
-  );
-}
-
 /* ── empty state ────────────────────────────────────────────────── */
 function EmptyState({ title, body, cta, onCta }) {
   return (
@@ -721,6 +706,9 @@ function FlowSheet({ dir, period, activeCards, onClose, onOpenPeriod, onOpenEnti
           <SectionTitle right={periodLabel(period)}>Transactions</SectionTitle>
           <Card style={{ padding: '2px 14px', marginBottom: 8 }}>
             {txns.slice(0, 12).map(t => <TxnRow key={t.id} t={t} onOpen={() => onOpenTxn(t)} />)}
+            {txns.length > 12 && (
+              <div className="num" style={{ fontSize: 11.5, fontWeight: 600, color: T.muted2, padding: '11px 2px' }}>Showing 12 of {txns.length} transactions</div>
+            )}
           </Card>
         </React.Fragment>
       )}
@@ -1123,8 +1111,6 @@ function FlowTile({ dir, total, count, onOpen }) {
 function Landing({ period, activeCards, open }) {
   const led = useLedger(period, activeCards);
   const proj = useProjection(period, activeCards);
-  const six = useMemo(() => historySeries(activeCards), [activeCards]);
-  const surplusSeries = six.filter(s => !s.mtd).map(s => s.in - s.out);   // MTD month would read as a false cliff
   const cushion = led.outTotal > 0 ? led.inTotal / led.outTotal : null;
   const empty = led.txns.length === 0;
   return (
@@ -1179,15 +1165,17 @@ function Landing({ period, activeCards, open }) {
               <span style={{ width: 22, height: 22, borderRadius: 999, background: T.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={12} stroke="#fff" sw={2.6} /></span>
               <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>Cashflow summary</span>
             </div>
-            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', marginTop: 10 }}>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 10 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted }}>Total cashflow</div>
-                <div style={{ marginTop: 2 }}><Amount value={led.net} size={21} color={led.net >= 0 ? T.green : T.redText} /></div>
+                <div style={{ marginTop: 2 }}><Amount value={led.net} size={21} color={led.net >= 0 ? T.green : T.redText} sign={led.net < 0 ? '−' : ''} /></div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 5, lineHeight: 1.5 }}>
                   You’ve {led.net >= 0 ? 'earned' : 'spent'} <span className="num" style={{ fontWeight: 700 }}>{fmtAED(Math.abs(led.net))} AED</span> more than you {led.net >= 0 ? 'spent' : 'earned'} {periodPhrase(period)}
                 </div>
               </div>
-              <AreaSpark points={surplusSeries} color={led.net >= 0 ? T.green : T.red} />
+              <span style={{ width: 52, height: 52, borderRadius: 16, background: led.net >= 0 ? T.greenChip : T.redChip, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon name={led.net >= 0 ? 'inflow' : 'outflow'} size={26} stroke={led.net >= 0 ? T.green : T.redText} sw={2} />
+              </span>
             </div>
           </Card>
 
