@@ -116,6 +116,8 @@ function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 const NOW = { y: 2026, m: 6, d: 21 };            // 21 July 2026
 const mKey = (y, m) => y * 12 + m;
 const NOW_KEY = mKey(NOW.y, NOW.m);
+const RETENTION_MONTHS = 12;                     // Lune keeps 6-12 months of data
+const DATA_START = NOW_KEY - (RETENTION_MONTHS - 1);
 
 /* ── cards (Select Cards sheet) ─────────────────────────────────── */
 const CARDS = [
@@ -144,7 +146,7 @@ const BRANDS = {
 /* ── transaction generator: ONE source of truth ─────────────────
    Deterministic per month; every screen aggregates these txns.   */
 function monthTxns(y, m) {
-  if (mKey(y, m) > NOW_KEY || mKey(y, m) < mKey(2025, 0)) return [];
+  if (mKey(y, m) > NOW_KEY || mKey(y, m) < DATA_START) return [];
   const dim = daysInMonth(y, m);
   const cut = mKey(y, m) === NOW_KEY ? NOW.d : dim;      // month-to-date cutoff
   const seed = (y * 37 + m * 11);
@@ -215,8 +217,7 @@ function useLedger(period, activeCards) {
   }, [period, activeCards]);
 }
 function historySeries(activeCards) {
-  const n = NOW_KEY - mKey(2025, 0) + 1;          // all months since data begins
-  return monthsBack(n).map(({ y, m }) => {
+  return monthsBack(RETENTION_MONTHS).map(({ y, m }) => {
     const txns = monthTxns(y, m).filter(t => activeCards.has(t.card));
     const groups = {};
     let inn = 0, out = 0;
@@ -510,7 +511,7 @@ function PeriodSheet({ period, onSet, onClose }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
         {MONTH_ABBR.map((ab, m) => {
-          const future = mKey(year, m) > NOW_KEY;
+          const future = mKey(year, m) > NOW_KEY || mKey(year, m) < DATA_START;
           const active = isSel(year, m) && period.months.length === 1;
           return (
             <button key={ab} disabled={future} onClick={() => { onSet({ preset: null, months: [{ y: year, m }] }); onClose(); }} className="cf-press" style={{
@@ -523,7 +524,7 @@ function PeriodSheet({ period, onSet, onClose }) {
         })}
       </div>
       <p style={{ fontSize: 11.5, color: T.muted, fontWeight: 500, marginTop: 14, lineHeight: 1.5 }}>
-        Everything — totals, breakdowns and lists — updates to the period you pick.
+        Everything — totals, breakdowns and lists — updates to the period you pick. Data is available for the last {RETENTION_MONTHS} months.
       </p>
     </Sheet>
   );
@@ -753,7 +754,7 @@ function EntityDetailSheet({ entity, dir, activeCards, onClose, onOpenTxn }) {
         <div style={{ marginTop: 12 }}>
           <Amount value={total} size={26} color={inflow ? T.green : T.redText} sign={inflow ? '+' : '−'} />
           <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 4 }}>
-            {b.freq === 'Occasional' ? `Total · all time` : `${b.freq} recurring ${inflow ? 'income' : 'payment'} · all time`}
+            {b.freq === 'Occasional' ? `Total · last ${RETENTION_MONTHS} months` : `${b.freq} recurring ${inflow ? 'income' : 'payment'} · last ${RETENTION_MONTHS} months`}
           </div>
         </div>
       </Card>
@@ -764,11 +765,11 @@ function EntityDetailSheet({ entity, dir, activeCards, onClose, onOpenTxn }) {
         <DetailRow icon="repeat" label={inflow ? 'Frequency' : 'Payment frequency'}>{b.freq}</DetailRow>
         {last && <DetailRow icon="calendar" label={inflow ? 'Last received' : 'Last transaction'}>{MONTH_ABBR[last.m]} {last.day}, {last.y}</DetailRow>}
         <DetailRow icon="avg" label={inflow ? 'Average amount' : 'Average transaction'}><Amount value={avg} size={13.5} color={T.ink} /></DetailRow>
-        <DetailRow icon="clock" label="First detected">Jan 2025</DetailRow>
+        {activeMonths.length > 0 && <DetailRow icon="clock" label="First seen">{MONTH_ABBR[activeMonths[0].m]} {activeMonths[0].y}</DetailRow>}
         <div style={{ borderBottom: 'none' }}><DetailRow icon="doc" label="Total transactions">{count}</DetailRow></div>
       </Card>
 
-      <SectionTitle right="All time">{inflow ? 'Inflow over time' : 'Outflow over time'}</SectionTitle>
+      <SectionTitle right={`Last ${RETENTION_MONTHS} months`}>{inflow ? 'Inflow over time' : 'Outflow over time'}</SectionTitle>
       <Card style={{ padding: 16 }}>
         <TrendBars items={perMonth.map(s => ({ y: s.y, m: s.m, mtd: s.mtd, total: s.total, parts: [{ key: 'v', color: g.color, value: s.total }] }))} height={96} slot={38} />
       </Card>
@@ -940,7 +941,7 @@ function TrendsSheet({ activeCards, onClose }) {
           <div key={tab} style={{ animation: 'fadeSwap .28s ease both' }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: T.muted }}>{inflow ? 'Total inflow' : 'Total outflow'}</div>
             <div style={{ marginTop: 4 }}><Amount value={grand} size={24} color={T.ink} /></div>
-            <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 4 }}>All time · {rangeLabel}</div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 4 }}>Last {RETENTION_MONTHS} months · {rangeLabel}</div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
             {groups.map(g => (
@@ -1156,7 +1157,7 @@ const NOTES = [
   ['Date first', 'The period control sits at the top of the landing screen; every figure on every screen derives from it. Fixes "amount shown before the period is chosen".'],
   ['One data model', 'Donut, trend, timeline, tops and lists all sum the same transactions — totals can no longer contradict each other (Figma: ₯5,760 total vs 4,326 surplus; donut 23.8K vs 19,240 spend).'],
   ['Valid month labels', 'Trends uses whole calendar months ("Feb 1–28", "Jul 1–21 · so far"). Figma shows "Feb 1st – 31st" and a 15 Jan–14 Jun range over monthly bars.'],
-  ['One scope per screen', 'Trend charts no longer sit inside period-scoped Inflow/Outflow sheets. The sheets are pure snapshots of the chosen period; all over-time views live on the Trends surface (renamed from Timeline), which shows all history with an Inflow/Outflow toggle in the breakdown palettes.'],
+  ['One scope per screen', 'Trend charts no longer sit inside period-scoped Inflow/Outflow sheets. The sheets are pure snapshots of the chosen period; all over-time views live on the Trends surface (renamed from Timeline), which shows the full retained history (Lune keeps 6–12 months of data) with an Inflow/Outflow toggle in the breakdown palettes.'],
   ['Presets + year picker', '"This month / Last month / 3 / 6 months" one tap away, plus a month grid with year stepper. Fixes the funnel-icon detour and missing year selection.'],
   ['Tap affordances', 'Every drillable row has a chevron and press state (inflow/outflow tiles, sources, merchants, transactions).'],
   ['Empty states', 'Landing and both sheets have an empty state with a recovery action (pick a period with no data to see it).'],
