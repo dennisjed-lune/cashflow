@@ -19,8 +19,25 @@ tap-through is what Expenses sells.
 
 ## Contents
 
-- **`Cashflow.html`** — interactive prototype (React via CDN, single file). Open in
-  a browser, or serve locally: `python3 -m http.server 8080` → http://localhost:8080/Cashflow.html
+- **`cashflow-flow.html`** — the CURRENT canonical prototype (2026-07-21; React via
+  CDN, single file). Serve locally: `python3 -m http.server 8080` →
+  http://localhost:8080/cashflow-flow.html
+  - Built from the design team's Figma page "Cashflow New Implimentation", with
+    eight flow fixes over those designs (documented in the in-page notes panel):
+    date-first period control, one data model (no contradicting totals), valid
+    whole-month labels, presets + year-aware month picker, tap affordances, empty
+    states, copy fixes, and one time scope per screen (over-time views moved to a
+    dedicated **Trends** surface — Inflow/Outflow toggle, breakdown palettes,
+    all-time scrollable history, tap-a-month detail panel).
+  - Journey: Landing → Trends → Inflow / Outflow sheets → source/merchant detail →
+    transaction detail (tags, notes, enrichment feedback) + card selector + period
+    picker. WCAG AA contrast, keyboard operable, dialog semantics, reduced motion.
+  - **Open product question:** following the new Figma, this prototype includes a
+    merchant → transaction drill inside Cashflow, which contradicts the glance-only
+    rule above. Either the rule changed or the design drifted — to be settled in the
+    upcoming design-team PRD before implementation.
+- **`Cashflow.html`** / **`Cashflow.dc.html`** — previous iterations (pre-Figma-redesign),
+  kept for reference.
   - Landing (net position + in/out + 6-month timeline) → **Outflow** (money-movement:
     total out, net vs inflow, over-time, high-level category + top-merchant glance) →
     **Inflow** (by type, enriched sources, recurrence, income stability).

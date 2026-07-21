@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cashflow · Full Flow — Lune SDK</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  button, input, textarea { font-family: inherit; }
+  .num { font-family: 'Helvetica Neue', 'Helvetica', Arial, 'Plus Jakarta Sans', sans-serif; }
+  .cf-scroll::-webkit-scrollbar { width: 0; display: none; }
+  .cf-scroll { scrollbar-width: none; }
+  @keyframes growX  { from { transform: scaleX(0); opacity: .4 } to { transform: scaleX(1); opacity: 1 } }
+  @keyframes growY  { from { transform: scaleY(0); opacity: .5 } to { transform: scaleY(1); opacity: 1 } }
+  @keyframes popIn  { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+  @keyframes sheetUp{ from { transform: translateY(60px); opacity: .5 } to { transform: translateY(0); opacity: 1 } }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fadeSwap { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: translateY(0) } }
+  button:focus-visible, [role="button"]:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #10A37F; outline-offset: 2px; }
+  .cf-press { transition: transform .16s cubic-bezier(.23,1,.32,1); }
+  .cf-press:active { transform: scale(.97); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useRef, useEffect } = React;
+
+/* ══════════════════════════════════════════════════════════════════
+   Cashflow · FULL FLOW — Lune SDK prototype (from Figma
+   "Cashflow New Implimentation" page, flow-corrected).
+
+   The journey:  Cashflow landing → Timeline sheet
+                                  → Inflow / Outflow sheets
+                                    → Top source / merchant detail
+                                    → Transaction detail (tags, notes,
+                                      enrichment feedback)
+                 + Select-cards sheet, period picker, empty states.
+
+   Flow fixes over the Figma frames (each maps to a PRD issue):
+   F1  Date first: the period is a first-class control on the landing
+       screen; every number on every screen derives from it.
+   F2  One data model: donuts, trends, timeline, tops and lists all
+       sum the SAME transactions — no 5,760-vs-4,326 contradictions.
+   F3  Timeline uses whole calendar months with valid labels
+       (no "Feb 1st – 31st"), current month explicitly "so far".
+   F4  Quick presets + year-aware month picker (no funnel detour).
+   F5  Tap affordances (chevrons/press states) on every drillable row.
+   F6  Empty states for landing + sheets when a period has no data.
+   F7  Copy: "received" not "recieved", raw descriptions match the
+       merchant, consistent "last 6 months" scope labels.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── theme (Lune DS, light) ─────────────────────────────────────── */
+const T = {
+  bg: '#FAFAFA', surface: '#FFFFFF', sunken: '#F5F5F5',
+  ink: '#101010', ink2: '#182129', ink3: '#0C151E',
+  muted: '#6B7075', muted2: '#656565', line: '#DFE1E2', grid: '#ECEEEF',
+  faint: 'rgba(16,16,16,0.06)',
+  green: '#0A634D', greenChip: '#E7EFED', keptPanel: '#F0F7F4',
+  red: '#F02727', redText: '#CC1E1E', redChip: '#FDE7E9',
+  scrim: 'rgba(0,0,0,0.32)',
+  closeBg: '#F0F1F2',
+  blue: '#1D5BD6',
+  cardShadow: '0 1px 2px rgba(7,3,18,0.05)',
+};
+/* donut palettes (from the Figma breakdown modules) */
+const IN_GROUPS = [
+  { key: 'income',   label: 'Income',       color: '#00A651', glyph: 'wallet' },
+  { key: 'transfer', label: 'Transfers in', color: '#1D4FB8', glyph: 'handCoins' },
+  { key: 'gov',      label: 'Government',   color: '#F7941E', glyph: 'gavel' },
+  { key: 'others',   label: 'Other income', color: '#D6219C', glyph: 'tag' },
+];
+const OUT_GROUPS = [
+  { key: 'everyday', label: 'Everyday spending', color: '#D6219C', glyph: 'tag' },
+  { key: 'bills',    label: 'Bills',             color: '#1D4FB8', glyph: 'home' },
+  { key: 'savings',  label: 'Savings',           color: '#00A651', glyph: 'pig' },
+];
+const groupOf = (key, dir) => (dir === 'in' ? IN_GROUPS : OUT_GROUPS).find(g => g.key === key);
+
+/* ── helpers ────────────────────────────────────────────────────── */
+function fmtAED(n) { return Math.round(n).toLocaleString('en-US'); }
+function fmt2(n) { return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtK(n) { return Math.abs(n) >= 1000 ? (Math.round(n / 100) / 10).toFixed(Math.round(n / 100) % 10 === 0 ? 0 : 1) + 'K' : String(Math.round(n)); }
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+function pressable(onClick) {
+  return {
+    role: 'button', tabIndex: 0, onClick,
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick && onClick(e); } },
+  };
+}
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_ABBR  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+
+/* "today" inside the prototype */
+const NOW = { y: 2026, m: 6, d: 21 };            // 21 July 2026
+const mKey = (y, m) => y * 12 + m;
+const NOW_KEY = mKey(NOW.y, NOW.m);
+
+/* ── cards (Select Cards sheet) ─────────────────────────────────── */
+const CARDS = [
+  { id: 'emerald',  name: 'ADIB Emerald Credit Card',  scheme: 'Mastercard', last4: '1234', kind: 'Credit', art: ['#0B3B2E', '#0A634D'] },
+  { id: 'cashback', name: 'ADIB Cashback Credit Card', scheme: 'Mastercard', last4: '5561', kind: 'Credit', art: ['#123D8A', '#2D7DD2'] },
+  { id: 'platinum', name: 'ADIB Platinum Debit Card',  scheme: 'Mastercard', last4: '9910', kind: 'Debit',  art: ['#23262B', '#4A4F57'] },
+];
+
+/* ── brands ─────────────────────────────────────────────────────── */
+const BRANDS = {
+  dib:      { name: 'Dubai Islamic Bank',              short: 'DIB', color: '#0F6E45', cat: 'Salary',           group: 'income',   dir: 'in',  freq: 'Monthly',   raw: 'SALARY TRANSFER DUBAI ISLAMIC BANK PJSC' },
+  mocd:     { name: 'Ministry of Community Development', short: 'MC', color: '#B8860B', cat: 'Government',       group: 'gov',      dir: 'in',  freq: 'Quarterly', raw: 'MOCD SOCIAL SUPPORT PAYMENT AE' },
+  enbd:     { name: 'Emirates NBD',                    short: 'EN', color: '#123D8A', cat: 'Transfer in',      group: 'transfer', dir: 'in',  freq: 'Monthly',   raw: 'INWARD TRANSFER EMIRATES NBD 3392' },
+  family:   { name: 'Family Support',                  short: 'FS', color: '#D6219C', cat: 'Other',            group: 'others',   dir: 'in',  freq: 'Occasional', raw: 'IPN TRANSFER RECEIVED REF 88213' },
+  emaar:    { name: 'Emaar',                           short: 'E',  color: '#1A1A1A', cat: 'Housing',          group: 'bills',    dir: 'out', freq: 'Monthly',   raw: 'EMAAR PROPERTIES RENT AUTOPAY' },
+  dewa:     { name: 'DEWA',                            short: 'DW', color: '#00833E', cat: 'Bills & utilities', group: 'bills',    dir: 'out', freq: 'Monthly',   raw: 'DEWA BILL PAYMENT 100482-01' },
+  etisalat: { name: 'Etisalat',                        short: 'ET', color: '#9B1E26', cat: 'Bills & utilities', group: 'bills',    dir: 'out', freq: 'Monthly',   raw: 'ETISALAT UAE POSTPAID 0501234567' },
+  carrefour:{ name: 'Carrefour',                       short: 'C',  color: '#004E9F', cat: 'Groceries',        group: 'everyday', dir: 'out', freq: 'Weekly',    raw: 'CARREFOUR MAF HYPERMARKET DXB' },
+  talabat:  { name: 'Talabat',                         short: 'T',  color: '#FF5A00', cat: 'Dining',           group: 'everyday', dir: 'out', freq: 'Weekly',    raw: 'TALABAT GENERAL TRADING DUBAI' },
+  apple:    { name: 'Apple Store',                     short: 'A',  color: '#1D1D1F', cat: 'Shopping',         group: 'everyday', dir: 'out', freq: 'Occasional', raw: 'APPLE STORE DUBAI MALL' },
+  noon:     { name: 'Noon',                            short: 'N',  color: '#B99B00', cat: 'Shopping',         group: 'everyday', dir: 'out', freq: 'Occasional', raw: 'NOON COM FZ LLC DUBAI' },
+  adnoc:    { name: 'ADNOC',                           short: 'AD', color: '#005EB8', cat: 'Transport',        group: 'everyday', dir: 'out', freq: 'Weekly',    raw: 'ADNOC DISTRIBUTION 774 DXB' },
+  savings:  { name: 'Transfer to Savings Pot',         short: 'S',  color: '#0A634D', cat: 'Savings',          group: 'savings',  dir: 'out', freq: 'Monthly',   raw: 'STANDING ORDER SAVINGS POT 07' },
+};
+
+/* ── transaction generator: ONE source of truth ─────────────────
+   Deterministic per month; every screen aggregates these txns.   */
+function monthTxns(y, m) {
+  if (mKey(y, m) > NOW_KEY || mKey(y, m) < mKey(2025, 0)) return [];
+  const dim = daysInMonth(y, m);
+  const cut = mKey(y, m) === NOW_KEY ? NOW.d : dim;      // month-to-date cutoff
+  const seed = (y * 37 + m * 11);
+  const v = (base, spread, salt) => Math.round(base + spread * Math.sin(seed * 2.17 + salt * 5.13));
+  const txns = [];
+  const add = (day, brandId, amount, card) => {
+    if (day > cut) return;
+    txns.push({ id: `${y}-${m}-${brandId}-${day}-${Math.abs(amount)}`, y, m, day, brandId, amount, card });
+  };
+  /* inflow */
+  add(25, 'dib', 18000, 'platinum');
+  add(3,  'enbd', v(3000, 400, 1), 'platinum');
+  if (m % 3 === 0) add(21, 'mocd', 2000, 'platinum');
+  if (m % 2 === 1) add(v(12, 5, 9), 'family', 2000, 'platinum');
+  /* outflow — May (m=4) peaks on purpose */
+  const peak = m === 4 ? 1.22 : 1;
+  add(1,  'emaar', -8000, 'platinum');
+  add(9,  'dewa', -v(640, 120, 2), 'platinum');
+  add(11, 'etisalat', -349, 'cashback');
+  [5, 12, 19, 26].forEach((d, i) => add(d, 'carrefour', -Math.round(v(520, 90, 3 + i) * peak), 'emerald'));
+  [4, 15, 24].forEach((d, i) => add(d, 'talabat', -Math.round(v(150, 45, 6 + i) * peak), 'cashback'));
+  [6, 14, 22, 28].forEach((d, i) => add(d, 'adnoc', -v(185, 40, 10 + i), 'emerald'));
+  if (m % 3 === 2) add(17, 'apple', -Math.round(v(1450, 350, 13) * peak), 'emerald');
+  if (m % 2 === 0) add(20, 'noon', -v(410, 130, 14), 'cashback');
+  add(26, 'savings', -2000, 'platinum');
+  return txns.sort((a, b) => b.day - a.day);
+}
+
+/* period = list of {y,m} months (chips render a friendly label) */
+function monthsBack(n) {
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const k = NOW_KEY - i;
+    out.push({ y: Math.floor(k / 12), m: k % 12 });
+  }
+  return out;
+}
+const PRESETS = [
+  { id: 'this',  label: 'This month',    months: () => monthsBack(1) },
+  { id: 'last',  label: 'Last month',    months: () => [monthsBack(2)[0]] },
+  { id: 'l3',    label: 'Last 3 months', months: () => monthsBack(3) },
+  { id: 'l6',    label: 'Last 6 months', months: () => monthsBack(6) },
+];
+function periodLabel(period) {
+  const ms = period.months;
+  const f = ms[0], l = ms[ms.length - 1];
+  const one = ms.length === 1;
+  if (one && mKey(f.y, f.m) === NOW_KEY) return `1–${NOW.d} ${MONTH_ABBR[f.m]} ’${String(f.y).slice(2)}`;
+  if (one) return `${MONTH_ABBR[f.m]} 1–${daysInMonth(f.y, f.m)} ’${String(f.y).slice(2)}`;
+  return `${MONTH_ABBR[f.m]} ’${String(f.y).slice(2)} – ${MONTH_ABBR[l.m]} ’${String(l.y).slice(2)}`;
+}
+function periodTitle(period) {
+  const p = PRESETS.find(p => p.id === period.preset);
+  return p ? p.label : 'Custom range';
+}
+
+/* aggregate a period through the card filter */
+function useLedger(period, activeCards) {
+  return useMemo(() => {
+    const txns = period.months.flatMap(({ y, m }) => monthTxns(y, m))
+      .filter(t => activeCards.has(t.card))
+      .map(t => ({ ...t, brand: BRANDS[t.brandId] }));
+    const inflow = txns.filter(t => t.amount > 0);
+    const outflow = txns.filter(t => t.amount < 0);
+    const inTotal = inflow.reduce((a, t) => a + t.amount, 0);
+    const outTotal = -outflow.reduce((a, t) => a + t.amount, 0);
+    return { txns, inflow, outflow, inTotal, outTotal, net: inTotal - outTotal };
+  }, [period, activeCards]);
+}
+function historySeries(activeCards) {
+  const n = NOW_KEY - mKey(2025, 0) + 1;          // all months since data begins
+  return monthsBack(n).map(({ y, m }) => {
+    const txns = monthTxns(y, m).filter(t => activeCards.has(t.card));
+    const groups = {};
+    let inn = 0, out = 0;
+    txns.forEach(t => {
+      const b = BRANDS[t.brandId];
+      groups[b.group] = (groups[b.group] || 0) + Math.abs(t.amount);
+      if (t.amount > 0) inn += t.amount; else out -= t.amount;
+    });
+    return { y, m, mtd: mKey(y, m) === NOW_KEY, in: inn, out, groups, txns };
+  });
+}
+function topByBrand(txns) {
+  const map = {};
+  txns.forEach(t => {
+    map[t.brandId] = map[t.brandId] || { brandId: t.brandId, brand: t.brand, total: 0, count: 0, last: t };
+    map[t.brandId].total += Math.abs(t.amount);
+    map[t.brandId].count += 1;
+    if (t.day > map[t.brandId].last.day) map[t.brandId].last = t;
+  });
+  return Object.values(map).sort((a, b) => b.total - a.total);
+}
+
+/* ── icons ──────────────────────────────────────────────────────── */
+function Icon({ name, size = 20, stroke = 'currentColor', sw = 1.8 }) {
+  const p = { fill: 'none', stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  const g = {
+    menu:     <g {...p}><path d="M4 7h16M4 12h16M4 17h10" /></g>,
+    close:    <path d="M6 6l12 12M18 6L6 18" {...p} />,
+    chevR:    <path d="M9 6l6 6-6 6" {...p} />,
+    chevL:    <path d="M15 6l-6 6 6 6" {...p} />,
+    chevD:    <path d="M6 9l6 6 6-6" {...p} />,
+    calendar: <g {...p}><rect x="3.5" y="5" width="17" height="16" rx="3" /><path d="M3.5 9.5h17M8 3v4M16 3v4" /></g>,
+    inflow:   <g {...p}><path d="M17 7 7 17M7 17h6.5M7 17v-6.5" /></g>,
+    outflow:  <g {...p}><path d="M7 17 17 7M17 7h-6.5M17 7v6.5" /></g>,
+    wallet:   <g {...p}><path d="M3 8.5A2.5 2.5 0 0 1 5.5 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8.5z" /><path d="M20 11h-4a2 2 0 0 0 0 4h4" /></g>,
+    card:     <g {...p}><rect x="3" y="5.5" width="18" height="13" rx="2.5" /><path d="M3 10h18" /></g>,
+    tap:      <g {...p}><path d="M9 11V6.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V12m0-1a1.5 1.5 0 0 1 3 0v4a5 5 0 0 1-5 5h-1.5a4 4 0 0 1-3-1.4l-3-3.4a1.6 1.6 0 0 1 2.3-2.2L9 14" /></g>,
+    repeat:   <g {...p}><path d="M4 9a5 5 0 0 1 5-5h9M18 4l2.5 2.5L18 9M20 15a5 5 0 0 1-5 5H6M6 20l-2.5-2.5L6 15" /></g>,
+    shield:   <g {...p}><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6l7-3z" /></g>,
+    check:    <path d="M5 12.5l4.5 4.5L19 7.5" {...p} />,
+    tag:      <g {...p}><path d="M4 4h7l9 9-7 7-9-9V4z" /><circle cx="8.4" cy="8.4" r="1.4" /></g>,
+    hash:     <g {...p}><path d="M9 4 7 20M17 4l-2 16M4.5 9h16M3.5 15h16" /></g>,
+    note:     <g {...p}><path d="M6 3.5h9L19 7.5v13H6v-17z" /><path d="M15 3.5v4h4M9 12h6M9 15.5h4" /></g>,
+    doc:      <g {...p}><rect x="4.5" y="3.5" width="15" height="17" rx="2.5" /><path d="M8 8h8M8 12h8M8 16h5" /></g>,
+    flag:     <g {...p}><path d="M6 21V4" /><path d="M6 5c4-2.4 8 2.4 12 0v9c-4 2.4-8-2.4-12 0" fill={stroke} stroke="none" /></g>,
+    edit:     <g {...p}><path d="M14.5 5.5l4 4L8 20H4v-4L14.5 5.5z" /></g>,
+    sparkles: <g {...p}><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" /></g>,
+    trendUp:  <g {...p}><path d="M3 17l5-5 4 3 8-9" /><path d="M20 6h-4M20 6v4" /></g>,
+    home:     <g {...p}><path d="M4 11l8-7 8 7" /><path d="M6.5 9.5V20h11V9.5" /></g>,
+    pig:      <g {...p}><path d="M5 12a7 6.4 0 0 1 14 0c0 1.6-.6 3-1.6 4.1l.6 2.9h-2.6l-.6-1.3a8 8 0 0 1-5.6 0L8.6 19H6l.6-2.9A6.3 6.3 0 0 1 5 12z" /><circle cx="15" cy="11" r=".9" fill={stroke} stroke="none" /></g>,
+    gavel:    <g {...p}><path d="M13 5l6 6M10 8l6 6M12.5 6.5l-5 5M4 20h9M15.5 9.5L9 16" /></g>,
+    handCoins:<g {...p}><circle cx="14.5" cy="6.5" r="2.5" /><path d="M3 14h3l3.5 2h5a1.5 1.5 0 0 1 0 3H10" /><path d="M3 19h3l3.5 2H16l5-3.2" /></g>,
+    search:   <g {...p}><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></g>,
+    clock:    <g {...p}><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></g>,
+    avg:      <g {...p}><rect x="3.5" y="4.5" width="17" height="15" rx="3" /><path d="M7 13.5l3-3 2.5 2 4.5-4.5" /></g>,
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'block' }}>{g[name]}</svg>;
+}
+
+/* UAE Dirham symbol (official mark), baseline-aligned */
+function Dirham({ size = 14, color = 'currentColor', style = {} }) {
+  const w = size * (344.84 / 299.91);
+  return (
+    <svg width={w} height={size} viewBox="0 0 344.84 299.91" fill={color} aria-label="AED"
+      style={{ display: 'inline-block', verticalAlign: '-0.02em', flexShrink: 0, ...style }}>
+      <path d="M342.14,140.96l2.7,2.54v-7.72c0-17-11.92-30.84-26.56-30.84h-23.41C278.49,36.7,222.69,0,139.68,0c-52.86,0-59.65,0-109.71,0,0,0,15.03,12.63,15.03,52.4v52.58h-27.68c-5.38,0-10.43-2.08-14.61-6.01l-2.7-2.54v7.72c0,17.01,11.92,30.84,26.56,30.84h18.44s0,29.99,0,29.99h-27.68c-5.38,0-10.43-2.07-14.61-6.01l-2.7-2.54v7.71c0,17,11.92,30.82,26.56,30.82h18.44s0,54.89,0,54.89c0,38.65-15.03,50.06-15.03,50.06h109.71c85.62,0,139.64-36.96,155.38-104.98h32.46c5.38,0,10.43,2.07,14.61,6l2.7,2.54v-7.71c0-17-11.92-30.83-26.56-30.83h-18.9c.32-4.88.49-9.87.49-15s-.18-10.11-.51-14.99h28.17c5.37,0,10.43,2.07,14.61,6.01ZM89.96,15.01h45.86c61.7,0,97.44,27.33,108.1,89.94l-153.96.02V15.01ZM136.21,284.93h-46.26v-89.98l153.87-.02c-9.97,56.66-42.07,88.38-107.61,90ZM247.34,149.96c0,5.13-.11,10.13-.23,14.99l-157.04.02v-29.99l157.05-.02c.22,4.84.33,9.83.33,15Z"/>
+    </svg>
+  );
+}
+function Amount({ value, size = 20, color = T.ink, sign, dsize }) {
+  return (
+    <span className="num" style={{ display: 'inline-flex', alignItems: 'baseline', gap: size * 0.28, color, fontWeight: 700, fontSize: size, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em' }}>
+      {sign && <span style={{ fontWeight: 700 }}>{sign}</span>}
+      <Dirham size={dsize || size * 0.72} color={color} />
+      {fmtAED(Math.abs(value))}
+    </span>
+  );
+}
+
+/* brand monogram (crisp everywhere — no blurry logo assets) */
+function Mark({ brand, size = 44 }) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: size / 2, flexShrink: 0, background: brand.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: size * 0.34, letterSpacing: '0.01em' }}>
+      {brand.short}
+    </div>
+  );
+}
+function Dot({ color, size = 9 }) { return <span style={{ width: size, height: size, borderRadius: 999, background: color, flexShrink: 0 }} />; }
+function Card({ children, style = {}, onClick, className }) {
+  return <div {...(onClick ? pressable(onClick) : {})} className={className} style={{ background: T.surface, borderRadius: 12, border: `1px solid ${T.line}`, overflow: 'hidden', boxShadow: T.cardShadow, cursor: onClick ? 'pointer' : 'default', ...style }}>{children}</div>;
+}
+function GroupChipIcon({ group, size = 16 }) {
+  return (
+    <span style={{ width: size + 8, height: size + 8, borderRadius: 6, background: hexA(group.color, 0.14), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon name={group.glyph} size={size * 0.78} stroke={group.color} sw={2} />
+    </span>
+  );
+}
+
+/* ── sheet shell (bottom sheet with backdrop) ───────────────────── */
+function Sheet({ title, onClose, children, headerRight, top = 44 }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 20 }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: T.scrim, backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', animation: 'fadeIn .25s ease both' }} />
+      <div role="dialog" aria-modal="true" aria-label={typeof title === 'string' && title.trim() ? title : 'Details'} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top, background: T.surface, borderTopLeftRadius: 32, borderTopRightRadius: 32, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 -12px 40px rgba(0,0,0,0.22)', animation: 'sheetUp .38s cubic-bezier(.32,.72,0,1) both' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8, flexShrink: 0 }}>
+          <div style={{ width: 38, height: 5, borderRadius: 999, background: T.faint }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 20px 10px', flexShrink: 0, gap: 10 }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: T.ink, letterSpacing: '-0.01em', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {headerRight}
+            <button onClick={onClose} aria-label="Close" className="cf-press" style={{ width: 38, height: 38, borderRadius: 999, border: 'none', cursor: 'pointer', background: T.closeBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="close" size={17} stroke={T.ink} />
+            </button>
+          </div>
+        </div>
+        <div className="cf-scroll" style={{ flex: 1, overflowY: 'auto', padding: '2px 20px 40px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── shared period chip + card selector chip ────────────────────── */
+function PeriodChip({ period, onOpen, subtle }) {
+  return (
+    <button onClick={onOpen} className="cf-press num" style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+      background: subtle ? T.surface : T.ink3, color: subtle ? T.ink : '#fff',
+      border: subtle ? `1px solid ${T.line}` : 'none',
+      borderRadius: 999, padding: '9px 12px', fontSize: 12.5, fontWeight: 600, minHeight: 36,
+    }}>
+      <Icon name="calendar" size={14} stroke={subtle ? T.ink : '#fff'} sw={2} />
+      {periodTitle(period)} · {periodLabel(period)}
+      <Icon name="chevD" size={13} stroke={subtle ? T.muted : 'rgba(255,255,255,0.7)'} sw={2.2} />
+    </button>
+  );
+}
+function CardChip({ activeCards, onOpen }) {
+  const n = activeCards.size;
+  const label = n === CARDS.length ? 'All cards' : n === 1 ? CARDS.find(c => activeCards.has(c.id)).name.replace('ADIB ', '') : `${n} cards`;
+  return (
+    <button onClick={onOpen} className="cf-press" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: T.surface, border: `1px solid ${T.line}`, borderRadius: 999, padding: '9px 12px', fontSize: 12.5, fontWeight: 600, color: T.ink, minHeight: 36 }}>
+      <Icon name="card" size={14} stroke={T.ink} sw={2} />
+      {label}
+      <Icon name="chevD" size={13} stroke={T.muted} sw={2.2} />
+    </button>
+  );
+}
+
+/* ── charts ─────────────────────────────────────────────────────── */
+function niceMax(v) { const s = Math.pow(10, Math.floor(Math.log10(v || 1))); return Math.ceil(v / s) * s; }
+
+function TrendBars({ items, sel, onPick, height = 150, slot = 40 }) {
+  const scroller = useRef(null);
+  useEffect(() => { if (scroller.current) scroller.current.scrollLeft = scroller.current.scrollWidth; }, [items.length]);
+  const max = niceMax(Math.max(...items.map(it => it.total), 1));
+  return (
+    <div ref={scroller} className="cf-scroll" style={{ overflowX: 'auto', margin: '0 -4px', padding: '0 4px' }}>
+      <div style={{ display: 'flex', gap: 6, borderBottom: `1px solid ${T.line}`, minWidth: '100%', width: items.length * (slot + 6) }}>
+        {items.map((it, i) => {
+          const lit = sel === i, dim = sel != null && !lit;
+          const yy = String(it.y).slice(2);
+          const showYear = i === 0 || it.m === 0;
+          return (
+            <div key={i} {...pressable(() => onPick && onPick(lit ? null : i))}
+              aria-label={`${MONTH_NAMES[it.m]} ${it.y}${it.mtd ? ' so far' : ''}: ${fmtAED(it.total)}`}
+              style={{ width: slot, flexShrink: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: onPick ? 'pointer' : 'default', borderRadius: 8, background: lit ? T.faint : 'transparent', transition: 'background .18s', paddingBottom: 0 }}>
+              <span className="num" style={{ fontSize: 10.5, fontWeight: 600, color: lit ? T.ink : T.muted2, marginBottom: 3, whiteSpace: 'nowrap' }}>{it.total ? fmtK(it.total) : ''}</span>
+              <div style={{ width: 26, display: 'flex', flexDirection: 'column-reverse', borderRadius: 5, overflow: 'hidden', height: Math.max(it.total ? 3 : 2, (it.total / max) * height), background: it.total ? 'transparent' : T.grid, opacity: dim ? 0.35 : 1, transition: 'opacity .18s', transformOrigin: 'bottom', animation: `growY .5s cubic-bezier(.22,1,.36,1) ${Math.min(i * 0.03, 0.5)}s both` }}>
+                {it.parts.map(pt => pt.value > 0 && <div key={pt.key} style={{ height: `${(pt.value / it.total) * 100}%`, background: pt.color }} />)}
+              </div>
+              <span className="num" style={{ fontSize: 10.5, fontWeight: lit ? 700 : 500, color: lit ? T.ink : T.muted2, margin: '5px 0 7px', whiteSpace: 'nowrap' }}>{showYear ? `${MONTH_ABBR[it.m]} ’${yy}` : MONTH_ABBR[it.m]}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* donut with icon chips on the ring (like the Figma breakdown) */
+function Donut({ segments, total, centerLabel }) {
+  const R = 74, SW = 10, C = 2 * Math.PI * R;
+  const size = 2 * (R + 26);
+  let acc = 0;
+  const arcs = segments.map(s => {
+    const frac = s.value / total;
+    const a = { ...s, start: acc, frac };
+    acc += frac;
+    return a;
+  });
+  const GAP = 0.012;
+  return (
+    <div style={{ position: 'relative', width: size, height: size, margin: '0 auto' }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)' }}>
+        {arcs.map(a => (
+          <circle key={a.key} cx={size / 2} cy={size / 2} r={R} fill="none"
+            stroke={a.color} strokeWidth={SW} strokeLinecap="round"
+            strokeDasharray={`${Math.max(0.001, (a.frac - GAP)) * C} ${C}`}
+            strokeDashoffset={-a.start * C} />
+        ))}
+      </svg>
+      {arcs.map(a => {
+        const mid = (a.start + a.frac / 2) * 2 * Math.PI - Math.PI / 2;
+        const x = size / 2 + Math.cos(mid) * R, y = size / 2 + Math.sin(mid) * R;
+        return (
+          <div key={a.key} style={{ position: 'absolute', left: x, top: y, transform: 'translate(-50%,-50%)', width: 26, height: 26, borderRadius: 8, background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ width: 22, height: 22, borderRadius: 6, background: hexA(a.color, 0.16), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name={a.glyph} size={13} stroke={a.color} sw={2.2} />
+            </span>
+          </div>
+        );
+      })}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: T.muted }}>{centerLabel}</span>
+        <Amount value={total} size={22} color={T.ink} />
+      </div>
+    </div>
+  );
+}
+function DonutLegend({ segments }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', marginTop: 14 }}>
+      {segments.map(s => (
+        <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <Dot color={s.color} size={8} />
+          <span style={{ fontSize: 12, fontWeight: 500, color: T.muted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</span>
+          <Amount value={s.value} size={12} color={T.ink2} dsize={9} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* landing area sparkline */
+function AreaSpark({ points, color = T.green, width = 132, height = 64 }) {
+  const max = Math.max(...points, 1), min = Math.min(...points, 0);
+  const xs = points.map((p, i) => [ (i / (points.length - 1)) * width, height - 6 - ((p - min) / (max - min || 1)) * (height - 16) ]);
+  const line = xs.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+      <defs><linearGradient id="spark" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={hexA(color, 0.25)} /><stop offset="100%" stopColor={hexA(color, 0)} /></linearGradient></defs>
+      <path d={`${line} L${width},${height} L0,${height} Z`} fill="url(#spark)" />
+      <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" />
+      {xs.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={i === xs.length - 1 ? 3.2 : 2.2} fill={color} />)}
+    </svg>
+  );
+}
+
+/* ── empty state ────────────────────────────────────────────────── */
+function EmptyState({ title, body, cta, onCta }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '36px 24px', animation: 'popIn .4s ease both' }}>
+      <div style={{ width: 64, height: 64, borderRadius: 20, background: T.sunken, margin: '0 auto 14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name="calendar" size={28} stroke={T.muted} sw={1.6} />
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: T.ink2 }}>{title}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 6, lineHeight: 1.55 }}>{body}</div>
+      {cta && (
+        <button onClick={onCta} className="cf-press" style={{ marginTop: 16, background: T.green, color: '#fff', border: 'none', borderRadius: 999, padding: '10px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{cta}</button>
+      )}
+    </div>
+  );
+}
+
+/* ── period picker sheet (F1/F4) ────────────────────────────────── */
+function PeriodSheet({ period, onSet, onClose }) {
+  const [year, setYear] = useState(period.months[0].y);
+  const isSel = (y, m) => period.months.some(x => x.y === y && x.m === m);
+  return (
+    <Sheet title="Choose period" onClose={onClose} top={220}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+        {PRESETS.map(p => {
+          const active = period.preset === p.id;
+          return (
+            <button key={p.id} onClick={() => { onSet({ preset: p.id, months: p.months() }); onClose(); }} className="cf-press" style={{
+              border: `1px solid ${active ? T.green : T.line}`, background: active ? T.greenChip : T.surface,
+              color: active ? T.green : T.ink2, borderRadius: 999, padding: '9px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            }}>{p.label}</button>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.ink2 }}>Or pick a month</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button onClick={() => setYear(year - 1)} className="cf-press" aria-label="Previous year" style={{ width: 30, height: 30, borderRadius: 999, border: `1px solid ${T.line}`, background: T.surface, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={15} stroke={T.ink} /></button>
+          <span className="num" style={{ fontSize: 14, fontWeight: 700, color: T.ink, width: 46, textAlign: 'center' }}>{year}</span>
+          <button onClick={() => setYear(year + 1)} disabled={year >= NOW.y} className="cf-press" aria-label="Next year" style={{ width: 30, height: 30, borderRadius: 999, border: `1px solid ${T.line}`, background: T.surface, cursor: year >= NOW.y ? 'default' : 'pointer', opacity: year >= NOW.y ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevR" size={15} stroke={T.ink} /></button>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+        {MONTH_ABBR.map((ab, m) => {
+          const future = mKey(year, m) > NOW_KEY;
+          const active = isSel(year, m) && period.months.length === 1;
+          return (
+            <button key={ab} disabled={future} onClick={() => { onSet({ preset: null, months: [{ y: year, m }] }); onClose(); }} className="cf-press" style={{
+              padding: '11px 0', borderRadius: 10, cursor: future ? 'default' : 'pointer',
+              border: `1px solid ${active ? T.green : T.line}`,
+              background: active ? T.greenChip : T.surface, color: future ? hexA('#7C8186', 0.45) : active ? T.green : T.ink2,
+              fontSize: 13, fontWeight: 600,
+            }}>{ab}</button>
+          );
+        })}
+      </div>
+      <p style={{ fontSize: 11.5, color: T.muted, fontWeight: 500, marginTop: 14, lineHeight: 1.5 }}>
+        Everything — totals, breakdowns and lists — updates to the period you pick.
+      </p>
+    </Sheet>
+  );
+}
+
+/* ── select cards sheet ─────────────────────────────────────────── */
+function CardArt({ card, w = 44 }) {
+  return (
+    <div style={{ width: w, height: w * 0.63, borderRadius: 6, background: `linear-gradient(120deg, ${card.art[0]}, ${card.art[1]})`, position: 'relative', flexShrink: 0, overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', right: 5, bottom: 4, display: 'flex' }}>
+        <span style={{ width: 8, height: 8, borderRadius: 99, background: 'rgba(255,80,80,0.9)' }} />
+        <span style={{ width: 8, height: 8, borderRadius: 99, background: 'rgba(255,190,0,0.85)', marginLeft: -3 }} />
+      </div>
+    </div>
+  );
+}
+function CheckBox({ on }) {
+  return (
+    <span style={{ width: 24, height: 24, borderRadius: 7, background: on ? T.green : T.surface, border: `1.5px solid ${on ? T.green : T.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background .15s' }}>
+      {on && <Icon name="check" size={14} stroke="#fff" sw={2.6} />}
+    </span>
+  );
+}
+function CardsSheet({ activeCards, onSet, onClose }) {
+  const all = activeCards.size === CARDS.length;
+  const toggle = (id) => {
+    const next = new Set(activeCards);
+    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.size === 0) return;                         // never zero cards
+    onSet(next);
+  };
+  const Row = ({ onClick, children, checked }) => (
+    <Card onClick={onClick} className="cf-press" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', marginBottom: 10 }}>
+      {children}
+      <CheckBox on={checked} />
+    </Card>
+  );
+  const section = (kind) => CARDS.filter(c => c.kind === kind);
+  return (
+    <Sheet title="Select cards" onClose={onClose} top={250}>
+      <Row onClick={() => onSet(new Set(CARDS.map(c => c.id)))} checked={all}>
+        <span style={{ width: 40, height: 28, borderRadius: 6, background: T.greenChip, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="card" size={18} stroke={T.green} sw={2} /></span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>All cards</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: T.muted }}>View data from all my cards</div>
+        </div>
+      </Row>
+      {['Credit', 'Debit'].map(kind => (
+        <React.Fragment key={kind}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink3, margin: '12px 0 8px' }}>Your {kind.toLowerCase()} card{section(kind).length > 1 ? 's' : ''}</div>
+          {section(kind).map(c => (
+            <Row key={c.id} onClick={() => toggle(c.id)} checked={activeCards.has(c.id)}>
+              <CardArt card={c} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                <div className="num" style={{ fontSize: 12, fontWeight: 500, color: T.muted }}>{c.scheme} · •••• {c.last4}</div>
+              </div>
+            </Row>
+          ))}
+        </React.Fragment>
+      ))}
+    </Sheet>
+  );
+}
+
+/* ── rows shared by inflow/outflow sheets ───────────────────────── */
+function EntityRow({ top, onOpen, dir }) {
+  const g = groupOf(top.brand.group, dir);
+  return (
+    <div {...pressable(onOpen)} className="cf-press" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 2px', cursor: 'pointer', borderBottom: `1px solid ${T.grid}` }}>
+      <Mark brand={top.brand} size={44} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 600, color: T.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{top.brand.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+          <GroupChipIcon group={g} size={12} />
+          <span style={{ fontSize: 11.5, fontWeight: 500, color: T.muted }}>{top.brand.cat}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: T.greenChip, color: T.green, borderRadius: 999, padding: '2px 8px', fontSize: 10.5, fontWeight: 700 }}>
+            <Icon name="repeat" size={10} stroke={T.green} sw={2.4} />{top.brand.freq}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Amount value={top.total} size={14.5} color={dir === 'in' ? T.green : T.redText} sign={dir === 'in' ? '+' : '−'} />
+        <Icon name="chevR" size={16} stroke={T.muted} sw={2.2} />
+      </div>
+    </div>
+  );
+}
+function TxnRow({ t, onOpen }) {
+  const dir = t.amount > 0 ? 'in' : 'out';
+  const g = groupOf(t.brand.group, dir);
+  return (
+    <div {...pressable(onOpen)} className="cf-press" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 2px', cursor: 'pointer', borderBottom: `1px solid ${T.grid}` }}>
+      <Mark brand={t.brand} size={44} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 600, color: T.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.brand.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+          <GroupChipIcon group={g} size={12} />
+          <span style={{ fontSize: 11.5, fontWeight: 500, color: T.muted }}>{t.brand.cat}</span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Amount value={t.amount} size={14.5} color={dir === 'in' ? T.green : T.redText} sign={dir === 'in' ? '+' : '−'} />
+          <Icon name="chevR" size={16} stroke={T.muted} sw={2.2} />
+        </div>
+        <span className="num" style={{ fontSize: 11, fontWeight: 500, color: T.muted2, paddingRight: 22 }}>{MONTH_ABBR[t.m]} {t.day}, {t.y}</span>
+      </div>
+    </div>
+  );
+}
+function SectionTitle({ children, right }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', margin: '24px 0 8px' }}>
+      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: T.ink3 }}>{children}</h2>
+      {right && <span style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>{right}</span>}
+    </div>
+  );
+}
+function InsightBanner({ tone = 'green', icon = 'repeat', children }) {
+  const c = tone === 'green' ? T.green : T.redText;
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: hexA(c, 0.07), borderRadius: 12, padding: '12px 14px', marginTop: 14 }}>
+      <Icon name={icon} size={16} stroke={c} sw={2} />
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: c, lineHeight: 1.5, flex: 1 }}>{children}</span>
+    </div>
+  );
+}
+
+/* ── inflow / outflow sheet (one component, two directions) ─────── */
+function FlowSheet({ dir, period, activeCards, onClose, onOpenPeriod, onOpenEntity, onOpenTxn }) {
+  const led = useLedger(period, activeCards);
+  const inflow = dir === 'in';
+  const groups = inflow ? IN_GROUPS : OUT_GROUPS;
+  const txns = inflow ? led.inflow : led.outflow;
+  const total = inflow ? led.inTotal : led.outTotal;
+
+  const segs = groups.map(g => ({ ...g, value: txns.filter(t => t.brand.group === g.key).reduce((a, t) => a + Math.abs(t.amount), 0) })).filter(s => s.value > 0);
+  const tops = topByBrand(txns);
+  const recurring = tops.filter(t => t.brand.freq !== 'Occasional').length;
+
+  return (
+    <Sheet title={inflow ? 'Inflow' : 'Outflow'} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginTop: 4 }}>
+        <div>
+          <Amount value={total} size={28} color={inflow ? T.green : T.redText} sign={inflow ? '' : '−'} />
+          <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 5 }}>
+            {txns.length === 0 ? 'No transactions this period'
+              : `Across ${txns.length} transaction${txns.length > 1 ? 's' : ''} this period`}
+          </div>
+        </div>
+        <PeriodChip period={period} onOpen={onOpenPeriod} subtle />
+      </div>
+
+      {txns.length === 0 ? (
+        <EmptyState
+          title={`No ${inflow ? 'inflow' : 'outflow'} in this period`}
+          body={`There are no ${inflow ? 'incoming' : 'outgoing'} transactions on the selected cards for ${periodLabel(period)}. Try a different period or card selection.`}
+          cta="Change period" onCta={onOpenPeriod}
+        />
+      ) : (
+        <React.Fragment>
+          <SectionTitle right={periodLabel(period)}>{inflow ? 'Income breakdown' : 'Spending breakdown'}</SectionTitle>
+          <Card style={{ padding: '18px 16px 14px' }}>
+            <Donut segments={segs} total={total} centerLabel={inflow ? 'Total income' : 'Total spend'} />
+            <DonutLegend segments={segs} />
+          </Card>
+
+          <SectionTitle>{inflow ? 'Top sources' : 'Top merchants'}</SectionTitle>
+          <Card style={{ padding: '2px 14px' }}>
+            {tops.slice(0, 4).map(top => (
+              <EntityRow key={top.brandId} top={top} dir={dir} onOpen={() => onOpenEntity(top)} />
+            ))}
+          </Card>
+          {inflow && recurring > 0 && (
+            <InsightBanner tone="green" icon="repeat">{recurring} of {tops.length} sources recur regularly — your salary lands every month.</InsightBanner>
+          )}
+
+          <SectionTitle right={periodLabel(period)}>Transactions</SectionTitle>
+          <Card style={{ padding: '2px 14px', marginBottom: 8 }}>
+            {txns.slice(0, 12).map(t => <TxnRow key={t.id} t={t} onOpen={() => onOpenTxn(t)} />)}
+          </Card>
+        </React.Fragment>
+      )}
+    </Sheet>
+  );
+}
+
+/* ── source / merchant detail sheet ─────────────────────────────── */
+function DetailRow({ icon, label, children }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 2px', borderBottom: `1px solid ${T.grid}` }}>
+      <span style={{ width: 32, height: 32, borderRadius: 999, background: T.sunken, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name={icon} size={15} stroke={T.ink2} sw={1.9} />
+      </span>
+      <span style={{ flex: 1, fontSize: 13.5, fontWeight: 500, color: T.muted }}>{label}</span>
+      <span className="num" style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>{children}</span>
+    </div>
+  );
+}
+function EntityDetailSheet({ entity, dir, activeCards, onClose, onOpenTxn }) {
+  const six = useMemo(() => historySeries(activeCards), [activeCards]);
+  const inflow = dir === 'in';
+  const b = entity.brand;
+  const g = groupOf(b.group, dir);
+  const perMonth = six.map(s => ({ ...s, txns: s.txns.filter(t => t.brandId === entity.brandId).map(t => ({ ...t, brand: BRANDS[t.brandId] })) }))
+    .map(s => ({ ...s, total: s.txns.reduce((a, t) => a + Math.abs(t.amount), 0) }));
+  const all = perMonth.flatMap(s => s.txns);
+  const total = all.reduce((a, t) => a + Math.abs(t.amount), 0);
+  const count = all.length;
+  const avg = count ? total / count : 0;
+  const last = all.length ? all.reduce((a, t) => (mKey(t.y, t.m) * 40 + t.day > mKey(a.y, a.m) * 40 + a.day ? t : a)) : null;
+  const activeMonths = perMonth.filter(s => s.total > 0);
+  return (
+    <Sheet title=" " onClose={onClose} top={64}>
+      <Card style={{ padding: 16, marginTop: -34 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Mark brand={b} size={46} />
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>{b.name}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <GroupChipIcon group={g} size={12} />
+              <span style={{ fontSize: 12, fontWeight: 500, color: T.muted }}>{b.cat}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Amount value={total} size={26} color={inflow ? T.green : T.redText} sign={inflow ? '+' : '−'} />
+          <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 4 }}>
+            {b.freq === 'Occasional' ? `Total · all time` : `${b.freq} recurring ${inflow ? 'income' : 'payment'} · all time`}
+          </div>
+        </div>
+      </Card>
+
+      <SectionTitle>{inflow ? 'Income details' : 'Merchant details'}</SectionTitle>
+      <Card style={{ padding: '2px 14px' }}>
+        <DetailRow icon="tag" label="Category">{b.cat}</DetailRow>
+        <DetailRow icon="repeat" label={inflow ? 'Frequency' : 'Payment frequency'}>{b.freq}</DetailRow>
+        {last && <DetailRow icon="calendar" label={inflow ? 'Last received' : 'Last transaction'}>{MONTH_ABBR[last.m]} {last.day}, {last.y}</DetailRow>}
+        <DetailRow icon="avg" label={inflow ? 'Average amount' : 'Average transaction'}><Amount value={avg} size={13.5} color={T.ink} /></DetailRow>
+        <DetailRow icon="clock" label="First detected">Jan 2025</DetailRow>
+        <div style={{ borderBottom: 'none' }}><DetailRow icon="doc" label="Total transactions">{count}</DetailRow></div>
+      </Card>
+
+      <SectionTitle right="All time">{inflow ? 'Inflow over time' : 'Outflow over time'}</SectionTitle>
+      <Card style={{ padding: 16 }}>
+        <TrendBars items={perMonth.map(s => ({ y: s.y, m: s.m, mtd: s.mtd, total: s.total, parts: [{ key: 'v', color: g.color, value: s.total }] }))} height={96} slot={38} />
+      </Card>
+
+      <SectionTitle>Transactions</SectionTitle>
+      <Card style={{ padding: '2px 14px', marginBottom: 8 }}>
+        {[...activeMonths].reverse().flatMap(s => s.txns).slice(0, 10).map(t => <TxnRow key={t.id} t={t} onOpen={() => onOpenTxn(t)} />)}
+      </Card>
+    </Sheet>
+  );
+}
+
+/* ── transaction detail sheet (tags / notes / feedback) ─────────── */
+function ChipInput({ chips, onAdd, onRemove, placeholder }) {
+  const [text, setText] = useState('');
+  const commit = () => { const v = text.trim(); if (v) { onAdd(v); setText(''); } };
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      {chips.map(c => (
+        <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: T.greenChip, color: T.green, border: `1px solid ${hexA(T.green, 0.25)}`, borderRadius: 999, padding: '4px 10px', fontSize: 12, fontWeight: 600 }}>
+          {c}
+          <button onClick={() => onRemove(c)} aria-label={`Remove ${c}`} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}><Icon name="close" size={11} stroke={T.green} sw={2.4} /></button>
+        </span>
+      ))}
+      <input value={text} onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } }}
+        onBlur={commit} placeholder={placeholder}
+        style={{ flex: 1, minWidth: 90, border: 'none', outline: 'none', fontSize: 13, fontWeight: 500, color: T.ink, background: 'transparent', padding: '4px 2px' }} />
+    </div>
+  );
+}
+function TxnDetailSheet({ txn, onClose }) {
+  const b = txn.brand;
+  const dir = txn.amount > 0 ? 'in' : 'out';
+  const [tags, setTags] = useState([]);
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [feedback, setFeedback] = useState(false);
+  const ActionRow = ({ icon, label, onClick }) => (
+    <div {...pressable(onClick)} className="cf-press" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 2px', cursor: 'pointer' }}>
+      <span style={{ width: 34, height: 34, borderRadius: 999, background: T.sunken, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={16} stroke={T.ink2} sw={1.9} /></span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: T.green }}>{label}</span>
+    </div>
+  );
+  return (
+    <Sheet title=" " onClose={onClose} top={84}>
+      <div style={{ textAlign: 'center', marginTop: -30 }}>
+        <div style={{ display: 'inline-block' }}><Mark brand={b} size={58} /></div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: T.ink, marginTop: 10 }}>{b.name}</div>
+        <div style={{ marginTop: 4 }}><Amount value={txn.amount} size={26} color={T.ink} /></div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 8 }}>
+          <span className="num" style={{ fontSize: 12.5, fontWeight: 500, color: T.muted }}>{MONTH_ABBR[txn.m]} {txn.day}, {txn.y}</span>
+          <span style={{ width: 3, height: 3, borderRadius: 99, background: T.muted }} />
+          <GroupChipIcon group={groupOf(b.group, dir)} size={12} />
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink2 }}>{b.cat}</span>
+        </div>
+        {feedback && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: T.sunken, borderRadius: 999, padding: '6px 12px', marginTop: 10, animation: 'popIn .3s ease both' }}>
+            <Icon name="flag" size={13} stroke={T.green} sw={1.6} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: T.ink2 }}>Feedback submitted</span>
+          </div>
+        )}
+      </div>
+
+      <Card style={{ padding: '13px 14px', marginTop: 18, display: 'flex', gap: 12 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 999, background: T.sunken, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="doc" size={16} stroke={T.ink2} sw={1.9} /></span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: T.muted }}>Raw description</div>
+          <div className="num" style={{ fontSize: 12.5, fontWeight: 600, color: T.ink2, marginTop: 2, lineHeight: 1.5, overflowWrap: 'break-word' }}>{b.raw}</div>
+        </div>
+      </Card>
+
+      <Card style={{ padding: '2px 14px', marginTop: 12 }}>
+        {/* tags */}
+        <div style={{ borderBottom: `1px solid ${T.grid}` }}>
+          {!tagsOpen && tags.length === 0
+            ? <ActionRow icon="hash" label="Add tags" onClick={() => setTagsOpen(true)} />
+            : (
+              <div style={{ display: 'flex', gap: 12, padding: '14px 2px' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 999, background: T.sunken, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="hash" size={16} stroke={T.ink2} sw={1.9} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <ChipInput chips={tags} placeholder={tagsOpen ? 'Type a tag, press return' : ''}
+                    onAdd={v => setTags(x => x.includes(v) ? x : [...x, v])}
+                    onRemove={v => setTags(x => x.filter(c => c !== v))} />
+                </div>
+              </div>
+            )}
+        </div>
+        {/* notes */}
+        {!noteOpen && note === ''
+          ? <ActionRow icon="note" label="Add notes" onClick={() => setNoteOpen(true)} />
+          : (
+            <div style={{ display: 'flex', gap: 12, padding: '14px 2px' }}>
+              <span style={{ width: 34, height: 34, borderRadius: 999, background: T.sunken, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="note" size={16} stroke={T.ink2} sw={1.9} /></span>
+              <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Write a quick note…" autoFocus={noteOpen}
+                style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 13, fontWeight: 500, color: T.ink, lineHeight: 1.5, background: 'transparent' }} />
+            </div>
+          )}
+      </Card>
+
+      {/* enrichment feedback */}
+      {!feedback ? (
+        <div {...pressable(() => setFeedback(true))} className="cf-press" style={{ display: 'flex', gap: 12, alignItems: 'flex-start', background: T.keptPanel, border: `1px solid ${hexA(T.green, 0.25)}`, borderRadius: 14, padding: 14, marginTop: 12, cursor: 'pointer' }}>
+          <span style={{ width: 36, height: 36, borderRadius: 10, background: T.green, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="sparkles" size={18} stroke="#fff" sw={1.8} /></span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>Improve brand name, logo or category</div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>Suggest an improvement — it trains Lune’s enrichment.</div>
+          </div>
+          <Icon name="chevR" size={17} stroke={T.ink2} sw={2} style={{ marginTop: 8 }} />
+        </div>
+      ) : (
+        <button onClick={() => setFeedback(false)} className="cf-press" style={{ width: '100%', marginTop: 12, background: T.surface, color: T.redText, border: `1px solid ${hexA(T.red, 0.45)}`, borderRadius: 12, padding: '13px 0', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          Cancel suggestion
+        </button>
+      )}
+    </Sheet>
+  );
+}
+
+/* ── trends sheet (all history, one scope, group palettes) ──────── */
+function SegToggle({ value, onSet, options }) {
+  return (
+    <div style={{ display: 'flex', background: T.sunken, borderRadius: 11, padding: 3 }}>
+      {options.map(o => {
+        const active = value === o.value;
+        return (
+          <button key={o.value} onClick={() => onSet(o.value)} className="cf-press" style={{
+            flex: 1, border: 'none', cursor: 'pointer', borderRadius: 8, padding: '9px 0',
+            background: active ? '#fff' : 'transparent', color: active ? T.ink : T.muted,
+            fontSize: 13, fontWeight: 600, boxShadow: active ? '0 1px 3px rgba(7,3,18,0.10)' : 'none',
+            transition: 'background .18s, color .18s',
+          }}>{o.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+function TrendsSheet({ activeCards, onClose }) {
+  const hist = useMemo(() => historySeries(activeCards), [activeCards]);
+  const [tab, setTabRaw] = useState('in');
+  const [sel, setSel] = useState(null);
+  const setTab = (t) => { setTabRaw(t); setSel(null); };
+  const inflow = tab === 'in';
+  const groups = inflow ? IN_GROUPS : OUT_GROUPS;
+
+  const items = hist.map(s => ({
+    y: s.y, m: s.m, mtd: s.mtd, s,
+    total: inflow ? s.in : s.out,
+    parts: groups.map(g => ({ key: g.key, color: g.color, value: s.groups[g.key] || 0 }))
+      .filter(pt => (inflow ? IN_GROUPS : OUT_GROUPS).some(g => g.key === pt.key)),
+  }));
+  const first = hist[0], last = hist[hist.length - 1];
+  const rangeLabel = `${MONTH_ABBR[first.m]} ’${String(first.y).slice(2)} – ${MONTH_ABBR[last.m]} ’${String(last.y).slice(2)}`;
+  const grand = items.reduce((a, it) => a + it.total, 0);
+  const fullTotals = items.filter(it => !it.mtd).map(it => it.total);
+  const lowest = Math.min(...fullTotals), highest = Math.max(...fullTotals);
+  const average = fullTotals.reduce((a, b) => a + b, 0) / fullTotals.length;
+  const peak = items.filter(it => !it.mtd).reduce((a, b) => (b.total > a.total ? b : a));
+  const variancePct = Math.round(Math.max(...fullTotals.map(t => Math.abs(t - average))) / average * 100);
+  const m = sel != null ? items[sel] : null;
+
+  return (
+    <Sheet title="Trends" onClose={onClose}>
+      <SegToggle value={tab} onSet={setTab} options={[{ value: 'in', label: 'Inflow' }, { value: 'out', label: 'Outflow' }]} />
+
+      <Card style={{ padding: 16, marginTop: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div key={tab} style={{ animation: 'fadeSwap .28s ease both' }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.muted }}>{inflow ? 'Total inflow' : 'Total outflow'}</div>
+            <div style={{ marginTop: 4 }}><Amount value={grand} size={24} color={T.ink} /></div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 4 }}>All time · {rangeLabel}</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
+            {groups.map(g => (
+              <span key={g.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 500, color: T.muted2 }}><Dot color={g.color} size={8} /> {g.label}</span>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 18, margin: '16px 0 14px' }}>
+          {[['Lowest', lowest], ['Average', average], ['Highest', highest]].map(([lab, v]) => (
+            <div key={lab}>
+              <div style={{ fontSize: 11.5, fontWeight: 500, color: T.muted }}>{lab} / month</div>
+              <Amount value={v} size={14} color={T.ink2} />
+            </div>
+          ))}
+        </div>
+
+        <TrendBars items={items} sel={sel} onPick={setSel} />
+
+        <div key={sel == null ? 'hint' : `${tab}-${sel}`} style={{ marginTop: 12, animation: 'fadeSwap .25s ease both' }}>
+          {m == null ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, color: T.muted2, padding: '4px 0' }}>
+              <Icon name="tap" size={15} stroke={T.muted2} sw={1.7} />
+              <span style={{ fontSize: 12.5, fontWeight: 500 }}>Tap a month to see its details</span>
+            </div>
+          ) : (() => {
+            const kept = m.s.in - m.s.out;
+            const groupTotal = m.parts.reduce((a, pt) => a + pt.value, 0);
+            const delta = !m.mtd && average > 0 ? Math.round(((m.total - average) / average) * 100) : null;
+            return (
+              <div style={{ background: T.sunken, borderRadius: 12, padding: '13px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{MONTH_NAMES[m.m]} {m.y}{m.mtd ? ' · so far' : ''}</span>
+                  <span className="num" style={{ fontSize: 12, fontWeight: 700, color: kept >= 0 ? T.green : T.redText, background: kept >= 0 ? T.greenChip : T.redChip, borderRadius: 999, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                    kept {kept >= 0 ? '' : '−'}{fmtK(Math.abs(kept))}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 11 }}>
+                  {m.parts.filter(pt => pt.value > 0).map(pt => {
+                    const grp = groups.find(g => g.key === pt.key);
+                    return (
+                      <div key={pt.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Dot color={pt.color} size={8} />
+                        <span style={{ fontSize: 12.5, fontWeight: 500, color: T.ink2, flex: 1 }}>{grp.label}</span>
+                        <span className="num" style={{ fontSize: 12, fontWeight: 500, color: T.muted2, width: 38, textAlign: 'right' }}>{Math.round((pt.value / groupTotal) * 100)}%</span>
+                        <span style={{ width: 78, display: 'flex', justifyContent: 'flex-end' }}><Amount value={pt.value} size={12.5} color={T.ink} dsize={9.5} /></span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ height: 1, background: T.line, margin: '11px 0 9px' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 500, color: T.muted2 }}>
+                    In <Amount value={m.s.in} size={12} color={T.ink2} dsize={9} /> · Out <Amount value={m.s.out} size={12} color={T.ink2} dsize={9} />
+                  </span>
+                  {delta != null && (
+                    <span className="num" style={{ fontSize: 11.5, fontWeight: 600, color: T.muted2, whiteSpace: 'nowrap' }}>
+                      {delta === 0 ? 'on your monthly average' : `${Math.abs(delta)}% ${delta > 0 ? 'above' : 'below'} your average`}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+        <div style={{ fontSize: 11.5, color: T.muted2, fontWeight: 500, marginTop: 10 }}>* {MONTH_ABBR[NOW.m]} ’{String(NOW.y).slice(2)} is month-to-date (1–{NOW.d})</div>
+
+        {inflow
+          ? <InsightBanner tone="green" icon="repeat">Income varied ±{variancePct}% across {fullTotals.length} full months — your salary lands every month.</InsightBanner>
+          : <InsightBanner tone="red" icon="trendUp">Spending peaked in {MONTH_NAMES[peak.m]} {peak.y}, mainly due to higher everyday and commitment expenses.</InsightBanner>}
+      </Card>
+    </Sheet>
+  );
+}
+
+/* ── landing screen ─────────────────────────────────────────────── */
+function FlowTile({ dir, total, count, onOpen }) {
+  const inflow = dir === 'in';
+  return (
+    <div {...pressable(onOpen)} className="cf-press" style={{ flex: 1, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, padding: '12px 12px', cursor: 'pointer', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: inflow ? T.greenChip : T.redChip, flexShrink: 0 }}>
+          <Icon name={inflow ? 'inflow' : 'outflow'} size={15} stroke={inflow ? T.green : T.red} sw={2.2} />
+        </span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink2, flex: 1, whiteSpace: 'nowrap' }}>{inflow ? 'Inflow' : 'Outflow'}</span>
+        <span className="num" style={{ fontSize: 10, fontWeight: 700, color: inflow ? T.green : T.red, background: inflow ? T.greenChip : T.redChip, borderRadius: 999, padding: '2px 6px', whiteSpace: 'nowrap', flexShrink: 0 }}>{count} txns</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 9 }}>
+        <Amount value={total} size={16.5} color={T.ink} />
+        <Icon name="chevR" size={15} stroke={T.muted} sw={2.2} />
+      </div>
+    </div>
+  );
+}
+function Landing({ period, activeCards, open }) {
+  const led = useLedger(period, activeCards);
+  const six = useMemo(() => historySeries(activeCards), [activeCards]);
+  const surplusSeries = six.filter(s => !s.mtd).map(s => s.in - s.out);   // MTD month would read as a false cliff
+  const cushion = led.outTotal > 0 ? led.inTotal / led.outTotal : null;
+  const empty = led.txns.length === 0;
+  return (
+    <div className="cf-scroll" style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '64px 20px 40px', background: T.bg }}>
+      <button aria-label="Menu" style={{ border: 'none', background: 'none', padding: 10, margin: '-10px 0 0 -10px', cursor: 'pointer', display: 'block' }}><Icon name="menu" size={24} stroke={T.ink} sw={2} /></button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <h1 style={{ margin: 0, fontSize: 25, fontWeight: 700, color: T.ink, letterSpacing: '-0.02em' }}>Cashflow</h1>
+      </div>
+
+      {/* F1: the period + cards are the first controls you meet */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <PeriodChip period={period} onOpen={() => open({ kind: 'period' })} />
+        <CardChip activeCards={activeCards} onOpen={() => open({ kind: 'cards' })} />
+      </div>
+
+      {empty ? (
+        <Card style={{ marginTop: 16 }}>
+          <EmptyState
+            title="No activity in this period"
+            body={`No transactions on the selected cards for ${periodLabel(period)}. Pick another period, or check your card selection.`}
+            cta="Choose period" onCta={() => open({ kind: 'period' })}
+          />
+        </Card>
+      ) : (
+        <React.Fragment>
+          <Card style={{ marginTop: 16, padding: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.muted }}>Total cashflow</div>
+            <div style={{ marginTop: 6, animation: 'fadeSwap .3s ease both' }} key={periodLabel(period) + led.net}>
+              <Amount value={led.net} size={30} color={led.net >= 0 ? T.ink : T.redText} sign={led.net < 0 ? '−' : ''} />
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 4 }}>Inflow minus outflow · {periodLabel(period)}</div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <FlowTile dir="in" total={led.inTotal} count={led.inflow.length} onOpen={() => open({ kind: 'flow', dir: 'in' })} />
+              <FlowTile dir="out" total={led.outTotal} count={led.outflow.length} onOpen={() => open({ kind: 'flow', dir: 'out' })} />
+            </div>
+          </Card>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: T.keptPanel, borderRadius: 14, padding: '14px 14px', marginTop: 14 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>Cashflow history</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>See how your inflow and outflow changed over time.</div>
+            </div>
+            <button onClick={() => open({ kind: 'trends' })} className="cf-press" style={{ background: T.green, color: '#fff', border: 'none', borderRadius: 10, padding: '11px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>View trends</button>
+          </div>
+
+          <h2 style={{ margin: '22px 0 10px', fontSize: 17, fontWeight: 700, color: T.ink3 }}>Smart insights</h2>
+
+          <Card style={{ padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 22, height: 22, borderRadius: 999, background: T.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={12} stroke="#fff" sw={2.6} /></span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>Cashflow summary</span>
+            </div>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', marginTop: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted }}>Total cashflow</div>
+                <div style={{ marginTop: 2 }}><Amount value={led.net} size={21} color={led.net >= 0 ? T.green : T.redText} /></div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 5, lineHeight: 1.5 }}>
+                  You’ve {led.net >= 0 ? 'earned' : 'spent'} <span className="num" style={{ fontWeight: 700 }}>{fmtAED(Math.abs(led.net))} AED</span> more than you {led.net >= 0 ? 'spent' : 'earned'} this period
+                </div>
+              </div>
+              <AreaSpark points={surplusSeries} color={led.net >= 0 ? T.green : T.red} />
+            </div>
+          </Card>
+
+          <Card style={{ padding: 16, marginTop: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 22, height: 22, borderRadius: 999, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={12} stroke="#fff" sw={2.2} /></span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>Financial cushion</span>
+            </div>
+            {cushion == null ? (
+              <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 10, lineHeight: 1.55 }}>
+                No expenses recorded this period, so there is nothing to cover — your whole inflow is surplus.
+              </div>
+            ) : (
+              <React.Fragment>
+                <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 10 }}>Expenses coverage</div>
+                <div className="num" style={{ fontSize: 21, fontWeight: 700, color: T.blue, marginTop: 2 }}>{cushion.toFixed(2)}x</div>
+                <div style={{ position: 'relative', height: 22, background: T.sunken, borderRadius: 6, marginTop: 10, overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', inset: '3px auto 3px 3px', width: `${Math.min(100, (cushion / 3) * 100)}%`, background: T.blue, borderRadius: 4, transformOrigin: 'left', animation: 'growX .55s cubic-bezier(.22,1,.36,1) both' }} />
+                </div>
+                <div className="num" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 500, color: T.muted2, marginTop: 5 }}>
+                  {['0x', '1x', '2x', '3x'].map(t => <span key={t}>{t}</span>)}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 8 }}>
+                  {cushion >= 1
+                    ? <span>Your income covers <span className="num" style={{ fontWeight: 700 }}>{Math.round(cushion * 100)}%</span> of your expenses this period</span>
+                    : 'Your expenses exceed your income this period'}
+                </div>
+              </React.Fragment>
+            )}
+          </Card>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+/* ── device chrome ──────────────────────────────────────────────── */
+function StatusBar() {
+  const c = '#101010';
+  return (
+    <div style={{ height: 52, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 28px 0 34px', position: 'absolute', top: 0, left: 0, right: 0, zIndex: 40, pointerEvents: 'none' }}>
+      <span className="num" style={{ fontSize: 16, fontWeight: 600, color: c, letterSpacing: '-0.02em' }}>9:41</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <svg width="18" height="12" viewBox="0 0 18 12"><g fill={c}><rect x="0" y="7" width="3" height="5" rx="1" /><rect x="5" y="4.5" width="3" height="7.5" rx="1" /><rect x="10" y="2" width="3" height="10" rx="1" /><rect x="15" y="0" width="3" height="12" rx="1" /></g></svg>
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none"><path d="M8.5 3.2c2 0 3.8.8 5.2 2.1M8.5 3.2C6.5 3.2 4.7 4 3.3 5.3M8.5 7c1 0 1.9.4 2.6 1M8.5 7c-1 0-1.9.4-2.6 1" stroke={c} strokeWidth="1.5" strokeLinecap="round" /><circle cx="8.5" cy="10.3" r="1" fill={c} /></svg>
+        <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="1" width="21" height="10" rx="3" fill="none" stroke={c} strokeOpacity="0.4" /><rect x="2" y="2.5" width="17" height="7" rx="1.5" fill={c} /><rect x="23" y="4" width="2" height="4" rx="1" fill={c} fillOpacity="0.5" /></svg>
+      </div>
+    </div>
+  );
+}
+
+/* ── flow-notes panel (maps prototype decisions → PRD issues) ───── */
+const NOTES = [
+  ['Date first', 'The period control sits at the top of the landing screen; every figure on every screen derives from it. Fixes "amount shown before the period is chosen".'],
+  ['One data model', 'Donut, trend, timeline, tops and lists all sum the same transactions — totals can no longer contradict each other (Figma: ₯5,760 total vs 4,326 surplus; donut 23.8K vs 19,240 spend).'],
+  ['Valid month labels', 'Trends uses whole calendar months ("Feb 1–28", "Jul 1–21 · so far"). Figma shows "Feb 1st – 31st" and a 15 Jan–14 Jun range over monthly bars.'],
+  ['One scope per screen', 'Trend charts no longer sit inside period-scoped Inflow/Outflow sheets. The sheets are pure snapshots of the chosen period; all over-time views live on the Trends surface (renamed from Timeline), which shows all history with an Inflow/Outflow toggle in the breakdown palettes.'],
+  ['Presets + year picker', '"This month / Last month / 3 / 6 months" one tap away, plus a month grid with year stepper. Fixes the funnel-icon detour and missing year selection.'],
+  ['Tap affordances', 'Every drillable row has a chevron and press state (inflow/outflow tiles, sources, merchants, transactions).'],
+  ['Empty states', 'Landing and both sheets have an empty state with a recovery action (pick a period with no data to see it).'],
+  ['Copy fixes', '"Last received" (not "recieved"), raw descriptions match the merchant, scope labels always say which window they cover.'],
+];
+function NotesPanel() {
+  const [openIdx, setOpenIdx] = useState(0);
+  return (
+    <div style={{ width: 300, alignSelf: 'flex-start', flexShrink: 0, background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderRadius: 18, padding: 18, boxShadow: '0 8px 30px rgba(0,0,0,0.12)', border: '0.5px solid rgba(0,0,0,0.08)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#8a8a8a', marginBottom: 4 }}>Flow fixes vs Figma</div>
+      <div style={{ fontSize: 12, color: '#6b6b6b', fontWeight: 500, lineHeight: 1.5, marginBottom: 10 }}>Each item below maps to an issue for the design-team PRD.</div>
+      {NOTES.map(([t, body], i) => (
+        <div key={t} style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }}>
+          <button onClick={() => setOpenIdx(openIdx === i ? -1 : i)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', border: 'none', padding: '10px 0', cursor: 'pointer' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#29261b' }}>{i + 1}. {t}</span>
+            <Icon name="chevD" size={14} stroke="#8a8a8a" sw={2.2} />
+          </button>
+          {openIdx === i && <p style={{ margin: '0 0 12px', fontSize: 12, color: '#5f5f5f', fontWeight: 500, lineHeight: 1.55 }}>{body}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── app: sheet stack navigation ────────────────────────────────── */
+function App() {
+  const [period, setPeriod] = useState({ preset: 'last', months: PRESETS[1].months() });
+  const [activeCards, setActiveCards] = useState(new Set(CARDS.map(c => c.id)));
+  const [stack, setStack] = useState([]);          // sheets, bottom → top
+  const push = (s) => setStack(x => [...x, s]);
+  const pop = () => setStack(x => x.slice(0, -1));
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') setStack(x => x.slice(0, -1)); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  const render = (s, i) => {
+    const common = { key: i, onClose: pop };
+    switch (s.kind) {
+      case 'period':   return <PeriodSheet {...common} period={period} onSet={setPeriod} />;
+      case 'cards':    return <CardsSheet {...common} activeCards={activeCards} onSet={setActiveCards} />;
+      case 'trends':   return <TrendsSheet {...common} activeCards={activeCards} />;
+      case 'flow':     return <FlowSheet {...common} dir={s.dir} period={period} activeCards={activeCards}
+                          onOpenPeriod={() => push({ kind: 'period' })}
+                          onOpenEntity={(top) => push({ kind: 'entity', top, dir: s.dir })}
+                          onOpenTxn={(t) => push({ kind: 'txn', t })} />;
+      case 'entity':   return <EntityDetailSheet {...common} entity={s.top} dir={s.dir} activeCards={activeCards}
+                          onOpenTxn={(t) => push({ kind: 'txn', t })} />;
+      case 'txn':      return <TxnDetailSheet {...common} txn={s.t} />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32, flexWrap: 'wrap', background: '#E2E8E6', padding: 24 }}>
+      <div style={{ width: 390, height: 844, borderRadius: 48, overflow: 'hidden', position: 'relative', background: T.bg, boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)' }}>
+        <div style={{ position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)', width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50 }} />
+        <StatusBar />
+        <Landing period={period} activeCards={activeCards} open={push} />
+        {stack.map(render)}
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60, height: 30, display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 8, pointerEvents: 'none' }}>
+          <div style={{ width: 139, height: 5, borderRadius: 100, background: 'rgba(0,0,0,0.28)' }} />
+        </div>
+      </div>
+      <NotesPanel />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
