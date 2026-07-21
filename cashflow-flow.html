@@ -198,6 +198,19 @@ function periodLabel(period) {
   if (one) return `${MONTH_ABBR[f.m]} 1–${daysInMonth(f.y, f.m)} ’${String(f.y).slice(2)}`;
   return `${MONTH_ABBR[f.m]} ’${String(f.y).slice(2)} – ${MONTH_ABBR[l.m]} ’${String(l.y).slice(2)}`;
 }
+function periodPhrase(period) {
+  const ms = period.months;
+  if (period.preset === 'this') return 'so far this month';
+  if (period.preset === 'l3') return 'in the last 3 months';
+  if (period.preset === 'l6') return 'in the last 6 months';
+  if (ms.length === 1) {
+    const { y, m } = ms[0];
+    const name = MONTH_NAMES[m];
+    if (mKey(y, m) === NOW_KEY) return `so far in ${name}`;
+    return y === NOW.y ? `in ${name}` : `in ${name} ${y}`;
+  }
+  return 'in this period';
+}
 function periodTitle(period) {
   const p = PRESETS.find(p => p.id === period.preset);
   return p ? p.label : 'Custom range';
@@ -673,7 +686,7 @@ function FlowSheet({ dir, period, activeCards, onClose, onOpenPeriod, onOpenEnti
           <Amount value={total} size={28} color={inflow ? T.green : T.redText} sign={inflow ? '' : '−'} />
           <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 5 }}>
             {txns.length === 0 ? 'No transactions this period'
-              : `Across ${txns.length} transaction${txns.length > 1 ? 's' : ''} this period`}
+              : `Across ${txns.length} transaction${txns.length > 1 ? 's' : ''} ${periodPhrase(period)}`}
           </div>
         </div>
         <PeriodChip period={period} onOpen={onOpenPeriod} subtle />
@@ -1097,7 +1110,7 @@ function Landing({ period, activeCards, open }) {
                 <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted }}>Total cashflow</div>
                 <div style={{ marginTop: 2 }}><Amount value={led.net} size={21} color={led.net >= 0 ? T.green : T.redText} /></div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 5, lineHeight: 1.5 }}>
-                  You’ve {led.net >= 0 ? 'earned' : 'spent'} <span className="num" style={{ fontWeight: 700 }}>{fmtAED(Math.abs(led.net))} AED</span> more than you {led.net >= 0 ? 'spent' : 'earned'} this period
+                  You’ve {led.net >= 0 ? 'earned' : 'spent'} <span className="num" style={{ fontWeight: 700 }}>{fmtAED(Math.abs(led.net))} AED</span> more than you {led.net >= 0 ? 'spent' : 'earned'} {periodPhrase(period)}
                 </div>
               </div>
               <AreaSpark points={surplusSeries} color={led.net >= 0 ? T.green : T.red} />
@@ -1111,7 +1124,7 @@ function Landing({ period, activeCards, open }) {
             </div>
             {cushion == null ? (
               <div style={{ fontSize: 12.5, fontWeight: 500, color: T.muted, marginTop: 10, lineHeight: 1.55 }}>
-                No expenses recorded this period, so there is nothing to cover — your whole inflow is surplus.
+                No expenses recorded {periodPhrase(period)}, so there is nothing to cover — your whole inflow is surplus.
               </div>
             ) : (
               <React.Fragment>
@@ -1125,8 +1138,8 @@ function Landing({ period, activeCards, open }) {
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 8 }}>
                   {cushion >= 1
-                    ? <span>Your income covers <span className="num" style={{ fontWeight: 700 }}>{Math.round(cushion * 100)}%</span> of your expenses this period</span>
-                    : 'Your expenses exceed your income this period'}
+                    ? <span>Your income covers <span className="num" style={{ fontWeight: 700 }}>{Math.round(cushion * 100)}%</span> of your expenses {periodPhrase(period)}</span>
+                    : `Your expenses exceeded your income ${periodPhrase(period)}`}
                 </div>
               </React.Fragment>
             )}
