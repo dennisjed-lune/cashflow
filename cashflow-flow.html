@@ -1053,6 +1053,7 @@ function ProjectionCard({ proj }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 22, height: 22, borderRadius: 999, background: T.ink3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calendar" size={12} stroke="#fff" sw={2.2} /></span>
         <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>Projected cashflow</span>
+        <span style={{ fontSize: 9.5, fontWeight: 700, color: T.blue, background: hexA(T.blue, 0.10), borderRadius: 999, padding: '2px 8px', letterSpacing: '0.02em' }}>NEXT STAGE</span>
         <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginLeft: 'auto' }}>by {MONTH_ABBR[NOW.m]} {dim}</span>
       </div>
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'baseline', gap: 7 }}>
@@ -1246,7 +1247,7 @@ const NOTES = [
   ['Tap affordances', 'Every drillable row has a chevron and press state (inflow/outflow tiles, sources, merchants, transactions).'],
   ['Empty states', 'Landing and both sheets have an empty state with a recovery action (pick a period with no data to see it).'],
   ['Copy fixes', '"Last received" (not "recieved"), raw descriptions match the merchant, scope labels always say which window they cover.'],
-  ['Projected cashflow (addition)', 'When the selected period includes today, the landing projects the month: so-far actuals plus recurring patterns rolled forward (salary in, recurring charges out) with an upcoming-charges list. Follows the Subscriptions v3 doctrine: an expectation, not a forecast. Not in the Figma.'],
+  ['Projected cashflow (next stage)', 'When the selected period includes today, the landing projects the month: so-far actuals plus recurring patterns rolled forward (salary in, recurring charges out) with an upcoming-charges list. Follows the Subscriptions v3 doctrine: an expectation, not a forecast. Not in the Figma — DEFERRED to the next PRD stage (badged in the card).'],
 ];
 function NotesPanel() {
   const [openIdx, setOpenIdx] = useState(0);
