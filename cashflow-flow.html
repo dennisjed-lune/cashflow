@@ -1108,7 +1108,7 @@ function FlowTile({ dir, total, count, onOpen }) {
     </div>
   );
 }
-function Landing({ period, activeCards, open }) {
+function Landing({ period, activeCards, open, nextStage }) {
   const led = useLedger(period, activeCards);
   const proj = useProjection(period, activeCards);
   const cushion = led.outTotal > 0 ? led.inTotal / led.outTotal : null;
@@ -1158,7 +1158,7 @@ function Landing({ period, activeCards, open }) {
 
           <h2 style={{ margin: '22px 0 10px', fontSize: 17, fontWeight: 700, color: T.ink3 }}>Smart insights</h2>
 
-          {proj && <ProjectionCard proj={proj} />}
+          {nextStage && proj && <ProjectionCard proj={proj} />}
 
           <Card style={{ padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1239,12 +1239,21 @@ const NOTES = [
   ['Copy fixes', '"Last received" (not "recieved"), raw descriptions match the merchant, scope labels always say which window they cover.'],
   ['Projected cashflow (next stage)', 'When the selected period includes today, the landing projects the month: so-far actuals plus recurring patterns rolled forward (salary in, recurring charges out) with an upcoming-charges list. Follows the Subscriptions v3 doctrine: an expectation, not a forecast. Not in the Figma — DEFERRED to the next PRD stage (badged in the card).'],
 ];
-function NotesPanel() {
+function NotesPanel({ nextStage, onNextStage }) {
   const [openIdx, setOpenIdx] = useState(0);
   return (
     <div style={{ width: 300, alignSelf: 'flex-start', flexShrink: 0, background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderRadius: 18, padding: 18, boxShadow: '0 8px 30px rgba(0,0,0,0.12)', border: '0.5px solid rgba(0,0,0,0.08)' }}>
       <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#8a8a8a', marginBottom: 4 }}>Flow fixes vs Figma</div>
       <div style={{ fontSize: 12, color: '#6b6b6b', fontWeight: 500, lineHeight: 1.5, marginBottom: 10 }}>Each item below maps to an issue for the design-team PRD.</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'rgba(29,91,214,0.07)', borderRadius: 12, marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#29261b' }}>Next stage preview</div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: '#6b6b6b', marginTop: 1 }}>Shows projected cashflow on the landing</div>
+        </div>
+        <button onClick={() => onNextStage(!nextStage)} aria-label="Toggle next-stage preview" style={{ width: 42, height: 25, borderRadius: 999, border: 'none', cursor: 'pointer', background: nextStage ? '#1D5BD6' : 'rgba(0,0,0,0.15)', position: 'relative', transition: 'background .15s', flexShrink: 0 }}>
+          <span style={{ position: 'absolute', top: 2.5, left: 2.5, width: 20, height: 20, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.25)', transform: nextStage ? 'translateX(17px)' : 'translateX(0)', transition: 'transform .15s ease-out' }} />
+        </button>
+      </div>
       {NOTES.map(([t, body], i) => (
         <div key={t} style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }}>
           <button onClick={() => setOpenIdx(openIdx === i ? -1 : i)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', border: 'none', padding: '10px 0', cursor: 'pointer' }}>
@@ -1263,6 +1272,7 @@ function App() {
   const [period, setPeriod] = useState({ preset: 'this', months: PRESETS[0].months() });
   const [activeCards, setActiveCards] = useState(new Set(CARDS.map(c => c.id)));
   const [stack, setStack] = useState([]);          // sheets, bottom → top
+  const [nextStage, setNextStage] = useState(false);
   const push = (s) => setStack(x => [...x, s]);
   const pop = () => setStack(x => x.slice(0, -1));
   useEffect(() => {
@@ -1293,13 +1303,13 @@ function App() {
       <div style={{ width: 390, height: 844, borderRadius: 48, overflow: 'hidden', position: 'relative', background: T.bg, boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)' }}>
         <div style={{ position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)', width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50 }} />
         <StatusBar />
-        <Landing period={period} activeCards={activeCards} open={push} />
+        <Landing period={period} activeCards={activeCards} open={push} nextStage={nextStage} />
         {stack.map(render)}
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60, height: 30, display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 8, pointerEvents: 'none' }}>
           <div style={{ width: 139, height: 5, borderRadius: 100, background: 'rgba(0,0,0,0.28)' }} />
         </div>
       </div>
-      <NotesPanel />
+      <NotesPanel nextStage={nextStage} onNextStage={setNextStage} />
     </div>
   );
 }

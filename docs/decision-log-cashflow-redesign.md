@@ -5,6 +5,28 @@ module's log is `decision-log-cashflow.md`.
 
 ---
 
+## 2026-07-21 (2) — Dennis resolves the handoff decisions
+
+### Decisions
+
+- **D-11 — Drill depth: transaction level.** The Cashflow journey drills
+  Landing → Inflow/Outflow → source/merchant → transaction detail. This
+  SUPERSEDES the parent PRD's D-04 ("Outflow is not the Expenses drill" /
+  glance-only). Former blocker B-1 closed. (Dennis: "drill depth is to
+  transaction level.")
+- **D-12 — Search + filters are in scope.** Inline search field +
+  category/tag filter chips on the Inflow/Outflow transaction lists (change
+  #10 in the PRD). Former blocker B-2 closed; visual design remains with the
+  design team.
+- **D-13 — Subscriptions integration removed from this PRD.** The
+  committed-spending glance, deposit-bound recurrence, and report-subscription
+  hand-off move to "Not in this stage"; revisit once the Lune Subscriptions
+  alpha ships. (Dennis: "do not add report subscription here.")
+- **D-14 — Projected cashflow hidden behind a demo toggle.** The prototype
+  hides the projection card by default; a "Next stage" toggle in the side
+  panel reveals it. Keeps the current-scope demo clean while preserving the
+  next-stage preview.
+
 ## 2026-07-21 — Redesign PRD drafted around the validated prototype
 
 **Context:** The design team produced the Figma "Cashflow New Implimentation"
