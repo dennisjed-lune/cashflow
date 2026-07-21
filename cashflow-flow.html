@@ -145,10 +145,10 @@ const BRANDS = {
 
 /* ── transaction generator: ONE source of truth ─────────────────
    Deterministic per month; every screen aggregates these txns.   */
-function monthTxns(y, m) {
+function monthTxns(y, m, full) {
   if (mKey(y, m) > NOW_KEY || mKey(y, m) < DATA_START) return [];
   const dim = daysInMonth(y, m);
-  const cut = mKey(y, m) === NOW_KEY ? NOW.d : dim;      // month-to-date cutoff
+  const cut = (!full && mKey(y, m) === NOW_KEY) ? NOW.d : dim;   // month-to-date cutoff (full = project to month end)
   const seed = (y * 37 + m * 11);
   const v = (base, spread, salt) => Math.round(base + spread * Math.sin(seed * 2.17 + salt * 5.13));
   const txns = [];
@@ -1030,6 +1030,74 @@ function TrendsSheet({ activeCards, onClose }) {
   );
 }
 
+/* ── projected cashflow (recurring pattern rolled forward) ──────── */
+function useProjection(period, activeCards) {
+  return useMemo(() => {
+    if (!period.months.some(({ y, m }) => mKey(y, m) === NOW_KEY)) return null;
+    const upcoming = monthTxns(NOW.y, NOW.m, true)
+      .filter(t => t.day > NOW.d && activeCards.has(t.card) && BRANDS[t.brandId].freq !== 'Occasional')
+      .map(t => ({ ...t, brand: BRANDS[t.brandId] }))
+      .sort((a, b) => a.day - b.day);
+    const inExp = upcoming.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0);
+    const outExp = -upcoming.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0);
+    const mtd = monthTxns(NOW.y, NOW.m).filter(t => activeCards.has(t.card));
+    const mtdNet = mtd.reduce((a, t) => a + t.amount, 0);
+    return { upcoming, inExp, outExp, mtdNet, projNet: mtdNet + inExp - outExp };
+  }, [period, activeCards]);
+}
+function ProjectionCard({ proj }) {
+  const dim = daysInMonth(NOW.y, NOW.m);
+  const pos = proj.projNet >= 0;
+  return (
+    <Card style={{ padding: 16, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ width: 22, height: 22, borderRadius: 999, background: T.ink3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="calendar" size={12} stroke="#fff" sw={2.2} /></span>
+        <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>Projected cashflow</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginLeft: 'auto' }}>by {MONTH_ABBR[NOW.m]} {dim}</span>
+      </div>
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'baseline', gap: 7 }}>
+        <span className="num" style={{ fontSize: 13, fontWeight: 600, color: T.muted }}>≈</span>
+        <Amount value={proj.projNet} size={21} color={pos ? T.green : T.redText} sign={proj.projNet < 0 ? '−' : ''} />
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 10, flexWrap: 'wrap' }}>
+        {[['So far (1–' + NOW.d + ')', proj.mtdNet, proj.mtdNet >= 0 ? T.ink2 : T.redText, proj.mtdNet < 0 ? '−' : ''],
+          ['Expected in', proj.inExp, T.green, '+'],
+          ['Expected out', proj.outExp, T.redText, '−']].map(([lab, v, c, sg]) => (
+          <div key={lab}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: T.muted }}>{lab}</div>
+            <div style={{ marginTop: 1 }}><Amount value={v} size={13} color={c} sign={sg} /></div>
+          </div>
+        ))}
+      </div>
+      {proj.upcoming.length > 0 ? (
+        <div style={{ marginTop: 12, borderTop: `1px solid ${T.grid}` }}>
+          {proj.upcoming.slice(0, 4).map((t, i, arr) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: proj.upcoming.length <= 4 && i === arr.length - 1 ? 'none' : `1px solid ${T.grid}` }}>
+              <Mark brand={t.brand} size={30} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.brand.name}</div>
+                <div className="num" style={{ fontSize: 10.5, fontWeight: 500, color: T.muted2 }}>{MONTH_ABBR[t.m]} {t.day} · {t.brand.freq.toLowerCase()}</div>
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: T.muted2, background: T.sunken, borderRadius: 999, padding: '2px 8px' }}>expected</span>
+              <Amount value={t.amount} size={12.5} color={t.amount > 0 ? T.green : T.redText} sign={t.amount > 0 ? '+' : '−'} />
+            </div>
+          ))}
+          {proj.upcoming.length > 4 && (
+            <div className="num" style={{ fontSize: 11.5, fontWeight: 600, color: T.muted2, padding: '9px 0 2px' }}>
+              +{proj.upcoming.length - 4} more expected · <Amount value={proj.upcoming.slice(4).reduce((a, t) => a + Math.abs(t.amount), 0)} size={11.5} color={T.muted2} dsize={8.5} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, fontWeight: 500, color: T.muted, marginTop: 12 }}>All recurring activity for {MONTH_NAMES[NOW.m]} has already landed.</div>
+      )}
+      <div style={{ fontSize: 10.5, fontWeight: 500, color: T.muted2, marginTop: 10, lineHeight: 1.5 }}>
+        Your recurring pattern from previous months, rolled forward — an expectation, not a forecast.
+      </div>
+    </Card>
+  );
+}
+
 /* ── landing screen ─────────────────────────────────────────────── */
 function FlowTile({ dir, total, count, onOpen }) {
   const inflow = dir === 'in';
@@ -1051,6 +1119,7 @@ function FlowTile({ dir, total, count, onOpen }) {
 }
 function Landing({ period, activeCards, open }) {
   const led = useLedger(period, activeCards);
+  const proj = useProjection(period, activeCards);
   const six = useMemo(() => historySeries(activeCards), [activeCards]);
   const surplusSeries = six.filter(s => !s.mtd).map(s => s.in - s.out);   // MTD month would read as a false cliff
   const cushion = led.outTotal > 0 ? led.inTotal / led.outTotal : null;
@@ -1099,6 +1168,8 @@ function Landing({ period, activeCards, open }) {
           </div>
 
           <h2 style={{ margin: '22px 0 10px', fontSize: 17, fontWeight: 700, color: T.ink3 }}>Smart insights</h2>
+
+          {proj && <ProjectionCard proj={proj} />}
 
           <Card style={{ padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1175,6 +1246,7 @@ const NOTES = [
   ['Tap affordances', 'Every drillable row has a chevron and press state (inflow/outflow tiles, sources, merchants, transactions).'],
   ['Empty states', 'Landing and both sheets have an empty state with a recovery action (pick a period with no data to see it).'],
   ['Copy fixes', '"Last received" (not "recieved"), raw descriptions match the merchant, scope labels always say which window they cover.'],
+  ['Projected cashflow (addition)', 'When the selected period includes today, the landing projects the month: so-far actuals plus recurring patterns rolled forward (salary in, recurring charges out) with an upcoming-charges list. Follows the Subscriptions v3 doctrine: an expectation, not a forecast. Not in the Figma.'],
 ];
 function NotesPanel() {
   const [openIdx, setOpenIdx] = useState(0);
@@ -1197,7 +1269,7 @@ function NotesPanel() {
 
 /* ── app: sheet stack navigation ────────────────────────────────── */
 function App() {
-  const [period, setPeriod] = useState({ preset: 'last', months: PRESETS[1].months() });
+  const [period, setPeriod] = useState({ preset: 'this', months: PRESETS[0].months() });
   const [activeCards, setActiveCards] = useState(new Set(CARDS.map(c => c.id)));
   const [stack, setStack] = useState([]);          // sheets, bottom → top
   const push = (s) => setStack(x => [...x, s]);
